@@ -46,8 +46,8 @@ judge-adapter = "judge_adapter.cli:main"
 judge-adapter-fastchat = "judge_adapter.fastchat_runner:main"
 
 [project.urls]
-Homepage = "https://github.com/hundredeuk2/judge-adapter"
-Source = "https://github.com/hundredeuk2/judge-adapter"
+Homepage = "https://github.com/selectstar-ai/EVAL.Davi"
+Source = "https://github.com/selectstar-ai/EVAL.Davi"
 
 [tool.hatch.metadata]
 allow-direct-references = true

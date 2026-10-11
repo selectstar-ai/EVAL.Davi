@@ -21,10 +21,10 @@ Python 3.9 or newer. Install from GitHub (this package is not on PyPI):
 
 ```bash
 # core: depends only on httpx (no torch, no FastChat)
-pip install "judge-adapter @ git+https://github.com/hundredeuk2/judge-adapter"
+pip install "judge-adapter @ git+https://github.com/selectstar-ai/EVAL.Davi"
 
 # optional FastChat binding: pulls FastChat at the pinned commit plus torch / transformers etc. (heavy)
-pip install "judge-adapter[fastchat] @ git+https://github.com/hundredeuk2/judge-adapter"
+pip install "judge-adapter[fastchat] @ git+https://github.com/selectstar-ai/EVAL.Davi"
 ```
 
 The `fastchat` extra pins `fschat @ git+https://github.com/lm-sys/FastChat@587d5cfa1609a43d192cedb8441cac3c17db105d`

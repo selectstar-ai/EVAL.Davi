@@ -9,7 +9,7 @@
   두 개를 넣으면 `A`/`B`/`tie`/명시 `error`와 호출 기록을 남긴다. JSONL CLI(`judge-adapter`), Python API(`import
   judge_adapter`), 선택 FastChat binding(`judge-adapter-fastchat`, extra `fastchat`), Claude Code plugin(`davi`)을
   제공한다. 배포 이름 `judge-adapter`, 라이선스 Apache-2.0.
-- **설치:** `pip install "judge-adapter @ git+https://github.com/hundredeuk2/judge-adapter"`. 코어 의존성은 `httpx`
+- **설치:** `pip install "judge-adapter @ git+https://github.com/selectstar-ai/EVAL.Davi"`. 코어 의존성은 `httpx`
   하나다. FastChat은 `[fastchat]` extra이며 commit `587d5cfa`로 고정하고 torch 등 무거운 의존성을 함께 설치한다.
 - **결과(단일 실행, 보장 아님):** HLE 영어 텍스트 90문항, 웹 검색을 쓰는 GPT-5.2 agent, 검색당 5문서, preset
   `v1-thr0.3-dev`. 세 설정이 모두 끝난 86문항에서 agent 입력 토큰은 top-3 대비 −31.4%, 5문서 전부 대비 −44.9%였다.
@@ -21,7 +21,7 @@
   따라 달랐다: HLE 86문항에서 필터 설정은 top-3 대비 출력 토큰 +6.7%, 총비용 +4.5%였다. 총비용 절감은 확립되지
   않았다. 같은 HLE 실행에서 72회 검색 중 25회는 5문서가 모두 drop되었다(그 실행의 검색 단위 관찰이며 일반 drop률·실패율이
   아님). 용도는 opt-in 입력 축소 도구이며 품질 향상·총비용 절감을 주장하지 않는다.
-- **Claude Code plugin `davi`:** `claude plugin marketplace add hundredeuk2/judge-adapter` 후 `claude plugin install
+- **Claude Code plugin `davi`:** `claude plugin marketplace add selectstar-ai/EVAL.Davi` 후 `claude plugin install
   davi@judge-adapter`. 대상은 **Tavily MCP의 `tavily_search` 하나**다(`tavily-mcp` npm 0.2.22, 소스 commit `1c1d54c`에서
   출력 형식 확인). 서버 별칭과 상관없이 `^mcp__[A-Za-z0-9_-]+__tavily_search$`로만 매칭하고, 다른 도구(다른 Tavily 도구·
   다른 검색 MCP·읽기/쓰기 도구·내장 WebSearch)에는 전혀 개입하지 않는다(결과 필터 기준; 검색 전 선택 옵션은 아래 항목). **Claude Code 내장 WebSearch는 필터하지

@@ -47,12 +47,12 @@ docs is not matched).
 ## Install
 
 ```bash
-claude plugin marketplace add hundredeuk2/judge-adapter
+claude plugin marketplace add selectstar-ai/EVAL.Davi
 claude plugin install davi@judge-adapter
 ```
 
 The install id is `<plugin>@<marketplace>`: plugin `davi`, marketplace `judge-adapter`. Inside a session,
-`/plugin marketplace add hundredeuk2/judge-adapter` and `/plugin install davi@judge-adapter` do the same.
+`/plugin marketplace add selectstar-ai/EVAL.Davi` and `/plugin install davi@judge-adapter` do the same.
 
 Add the Tavily MCP server as a local stdio server, **pinned to the verified version** (never an unpinned `npx`
 latest). The key is your own Tavily API key from tavily.com; `--env` stores it in your Claude Code MCP configuration,

@@ -4,18 +4,21 @@
 worth reading reach the agent.** Also a pairwise LLM-judge adapter with fixed options, retries 0 and run-wide limits.
 
 [Docs](docs/) · [Plugin](docs/plugin.md) · [Verification](docs/verification.md) · [한국어](docs/ko.md) ·
-[GitHub](https://github.com/hundredeuk2/judge-adapter)
+[GitHub](https://github.com/selectstar-ai/EVAL.Davi)
 
 ## Installation
+
+The project's repository is [selectstar-ai/EVAL.Davi](https://github.com/selectstar-ai/EVAL.Davi); the Python
+distribution and import names (`judge-adapter`, `judge_adapter`) and the plugin name (`davi`) are unchanged.
 
 Python 3.9 or newer. Install from GitHub (this package is not on PyPI):
 
 ```bash
 # core: depends only on httpx (no torch, no FastChat)
-pip install "judge-adapter @ git+https://github.com/hundredeuk2/judge-adapter"
+pip install "judge-adapter @ git+https://github.com/selectstar-ai/EVAL.Davi"
 
 # optional FastChat binding: pulls FastChat at the pinned commit plus torch / transformers etc. (heavy)
-pip install "judge-adapter[fastchat] @ git+https://github.com/hundredeuk2/judge-adapter"
+pip install "judge-adapter[fastchat] @ git+https://github.com/selectstar-ai/EVAL.Davi"
 ```
 
 From a source checkout: `pip install .` (or `pip install -e ".[test]"` for development). Pinned FastChat revision
@@ -24,7 +27,7 @@ and install checks: [reference](docs/reference.md#installation-details).
 Claude Code plugin (`davi`, marketplace `judge-adapter`):
 
 ```bash
-claude plugin marketplace add hundredeuk2/judge-adapter
+claude plugin marketplace add selectstar-ai/EVAL.Davi
 claude plugin install davi@judge-adapter
 claude mcp add --transport stdio --env TAVILY_API_KEY="$TAVILY_API_KEY" tavily -- npx -y tavily-mcp@0.2.22
 ```
@@ -186,8 +189,6 @@ Follow-up candidates, not a committed roadmap and not instructions to run anythi
    intent by the search gate.
 2. Conditional, separate candidates: merge reference-answer (pointwise) grading support, which is not part of 0.4.0;
    resume the multi-turn evaluation, on hold because of license constraints on the evaluation corpus.
-3. A move to a new repository under a new name: to be reviewed once the maintainer provides its URL. Remotes,
-   package and plugin names and existing links are unchanged for now.
 
 ## Citation
 
@@ -199,7 +200,7 @@ If you use this software, please cite the repository:
   title   = {judge-adapter: context filtering and pairwise LLM-judge calls},
   year    = {2026},
   version = {0.4.0},
-  url     = {https://github.com/hundredeuk2/judge-adapter}
+  url     = {https://github.com/selectstar-ai/EVAL.Davi}
 }
 ```
 
