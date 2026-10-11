@@ -49,7 +49,9 @@ reading stdin otherwise, with no state and no output):
   (any toggle change), and keeps the search until the next prompt writes a new state.
 - Concurrency: each prompt's read-decide-write runs under a per-session ``fcntl.flock`` (``<hash>.lock``, waited at
   most 1 s), so a concurrent prompt without a signal cannot overwrite a flag it did not see; each write is one atomic
-  replace, so the gate (which reads without the lock) sees the old or the new state, never a partial one.
+  replace, so the gate (which reads without the lock) sees the old or the new state, never a partial one. Pruning
+  takes the same lock without waiting (busy keys are skipped) and unlinks a lock file only while holding it; after
+  acquiring, a process checks that the path still names the inode it locked (else it retries within the 1 s).
 """
 from __future__ import annotations
 
@@ -184,21 +186,42 @@ class PromptState:
     def _lock(self, session):
         """-> fd holding an exclusive flock on the session's lock file, or None (no fcntl, timeout, I/O error)."""
         try:
-            import fcntl
             os.makedirs(self.root, mode=0o700, exist_ok=True)
-            fd = os.open(self.path(session)[:-5] + '.lock', os.O_CREAT | os.O_RDWR, 0o600)
-        except (ImportError, OSError):
+        except OSError:
             return None
-        deadline = time.monotonic() + self.LOCK_WAIT_SECONDS
+        return self._acquire(self.path(session)[:-5] + '.lock', blocking=True)
+
+    def _acquire(self, lock, blocking):
+        """-> fd holding an exclusive flock on ``lock``, or None (busy, timeout, no fcntl, I/O error). After acquiring
+        it checks that the path still names the locked inode (prune may have unlinked it meanwhile), else retries
+        within the same wait limit."""
+        try:
+            import fcntl
+        except ImportError:
+            return None
+        deadline = time.monotonic() + (self.LOCK_WAIT_SECONDS if blocking else 0.0)
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return fd
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    os.close(fd)
-                    return None
-                time.sleep(0.005)
+                fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+            except OSError:
+                return None
+            try:
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            os.close(fd)
+                            return None
+                        time.sleep(0.005)
+                try:
+                    same = os.fstat(fd).st_ino == os.stat(lock).st_ino
+                except FileNotFoundError:
+                    same = False
+                if same:
+                    return fd
+                os.close(fd)               # locked an unlinked file: retry on the current one
             except OSError:
                 os.close(fd)
                 return None
@@ -230,29 +253,44 @@ class PromptState:
             pass
 
     def prune(self, skip=None):
-        """Best effort: remove session files and temp files older than a day.
-
-        TODO (known defect #5, recorded 2026-10-11, not fixed; S3 candidate): this unlinks a day-old session's
-        ``.lock`` without taking that lock, and ``_lock`` lacks ``query_hook.RetryState._acquire``'s inode re-check
-        after acquiring. A process still holding (or waiting on) the old lock and a new process locking a freshly
-        created file can then both hold "the" session lock at once. Fix like RetryState: unlink only while holding
-        the lock, and re-check ``fstat(fd).st_ino == stat(path).st_ino`` after acquiring."""
+        """Best effort: remove session files and temp files older than a day. A session file is removed only under
+        its own lock, taken without waiting (a busy key is skipped), and only if it is still a day old there; its
+        lock file is unlinked while held (``_acquire`` re-checks the inode). Without fcntl no lock files exist and
+        day-old session files are removed as before."""
         cutoff = self.now() - PRUNE_AGE_SECONDS
         try:
             with os.scandir(self.root) as it:
                 names = [e.path for n, e in zip(range(PRUNE_LIMIT), it)]
         except OSError:
             return
+        try:
+            import fcntl  # noqa: F401
+            locking = True
+        except ImportError:
+            locking = False
         for p in names:
             if p == skip or not p.endswith('.json'):
                 continue
             try:
-                if os.stat(p).st_mtime < cutoff:
+                if os.stat(p).st_mtime >= cutoff:
+                    continue
+                if os.path.basename(p).startswith('.tmp-'):
                     os.remove(p)
-                    if not os.path.basename(p).startswith('.tmp-'):
-                        os.remove(p[:-5] + '.lock')      # the session's lock file goes with its day-old state
+                    continue
+            except OSError:
+                continue
+            fd = self._acquire(p[:-5] + '.lock', blocking=False) if locking else None
+            if locking and fd is None:
+                continue
+            try:
+                if os.stat(p).st_mtime < cutoff:              # re-checked under the lock: an update meanwhile stays
+                    os.remove(p)
+                    os.remove(p[:-5] + '.lock')
             except OSError:
                 pass
+            finally:
+                if fd is not None:
+                    os.close(fd)
 
 
 # --- entry point ---------------------------------------------------------------------------------------------------
