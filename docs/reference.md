@@ -548,7 +548,8 @@ variables are removed for each test. The plugin hook tests (`tests/test_plugin_h
 with sample hook inputs and a fake choice endpoint, and run the launcher as a subprocess;
 `tests/test_query_hook.py` does the same for the optional PreToolUse options and the explicit-request protection,
 `tests/test_query_hook_race.py` runs the search-gate retry state in real separate processes, and
-`tests/test_toggles.py` covers the toggle file, the control CLI, the command files and each launcher's toggle.
+`tests/test_toggles.py` covers the toggle file, the control CLI, the command files and each launcher's toggle;
+`tests/test_plugin_common.py` checks the shared hook module (loaded without httpx, nothing heavy on the off path).
 
 ### Limits
 
@@ -599,6 +600,7 @@ judge-adapter/
 │   ├── query_presets.py         # EXPERIMENTAL wording, example presets, guard and explicit-request patterns
 │   ├── prompt_signal.py         # UserPromptSubmit: explicit search request -> per-session state (no prompt text)
 │   ├── toggles.py               # toggles.json: read, precedence, locked atomic writes
+│   ├── plugin_common.py         # stdlib-only contracts shared by the hooks: options, env names, log line, wall budget
 │   ├── plugin_names.py          # plugin / marketplace working names in one place
 │   ├── backends.py              # haiku_direct and choice_endpoint backends (httpx, retries 0)
 │   ├── core.py                  # JudgeAdapter, build_backend, trace writer

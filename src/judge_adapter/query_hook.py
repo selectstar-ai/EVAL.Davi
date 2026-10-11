@@ -6,7 +6,7 @@ Run by ``hooks/query_options_hook.py`` (which exits at once, before reading stdi
 hook input JSON object on stdin, prints at most one JSON object on stdout, always exits 0.
 
 Tools: the built-in ``WebSearch`` and the Tavily MCP tool ``tavily_search`` (tavily-mcp npm 0.2.22, matcher
-``plugin_hook.KNOWN_TOOLS_MATCHER``). Every other tool gets zero intervention.
+``plugin_common.KNOWN_TOOLS_MATCHER``). Every other tool gets zero intervention.
 
 Options (fixed order: the gate runs first; on a deny the domain decision is skipped):
 
@@ -86,9 +86,9 @@ import re
 import sys
 import tempfile
 import time
-import unicodedata
 from dataclasses import dataclass
 
+from . import plugin_common as PC
 from . import plugin_hook as H
 from . import plugin_names as N
 from . import prompt_signal as PS
@@ -113,7 +113,7 @@ _NAME_RE = re.compile(r'^[a-z0-9][a-z0-9_-]{0,31}$')
 _DOMAIN_RE = re.compile(r'^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)+$')
 
 
-ConfigError = H.ConfigError
+ConfigError = PC.ConfigError          # the same class as plugin_hook.ConfigError
 
 # Gate status when the prompt state (``prompt_signal``) cannot show a fresh "no explicit request" for this session:
 # the search is kept without any endpoint call.
@@ -138,14 +138,7 @@ class PresetSet:
 
 
 def _flag(v, name):
-    if v is None:
-        return False
-    s = v.strip().lower()
-    if s in ('1', 'true', 'yes', 'on'):
-        return True
-    if s in ('0', 'false', 'no', 'off'):
-        return False
-    raise ConfigError(f'{name} must be true or false')
+    return PC.parse_flag(v, name, False)
 
 
 def parse_domain_presets(raw):
@@ -216,7 +209,7 @@ def load_query_settings(env, toggle_file=None):
     ``domain_presets_enabled`` and ``domain_apply_mode`` when it sets them; a missing or corrupt file changes nothing.
     The global ``enabled=false`` still turns both options off (``process`` checks it first)."""
     s = H.load_settings(env)
-    o = lambda k: H.option(env, k)            # noqa: E731
+    o = lambda k: PC.option(env, k)           # noqa: E731
     dpe = _flag(o('domain_presets_enabled'), 'domain_presets_enabled')
     sge = _flag(o('search_gate_enabled'), 'search_gate_enabled')
     mode = (o('domain_apply_mode') or 'ask').lower()
@@ -228,8 +221,8 @@ def load_query_settings(env, toggle_file=None):
         raise ConfigError(f'domain_apply_mode must be one of {APPLY_MODES}')
     return dataclasses.replace(
         s, domain_presets_enabled=dpe, search_gate_enabled=sge, domain_apply_mode=mode,
-        domain_min_confidence=H._num(o('domain_min_confidence'), 'domain_min_confidence', 0.6, 0.0, 1.0),
-        search_gate_threshold=H._num(o('search_gate_threshold'), 'search_gate_threshold', 0.85, 0.5, 1.0),
+        domain_min_confidence=PC.parse_num(o('domain_min_confidence'), 'domain_min_confidence', 0.6, 0.0, 1.0),
+        search_gate_threshold=PC.parse_num(o('search_gate_threshold'), 'search_gate_threshold', 0.85, 0.5, 1.0),
         domain_presets=parse_domain_presets(o('domain_presets')) if dpe else None)
 
 
@@ -237,7 +230,7 @@ def tool_kind(tool, settings):
     """'websearch' | 'tavily' | None (zero intervention). Only the two tools whose input schema was checked."""
     if tool == 'WebSearch':
         return 'websearch'
-    if isinstance(tool, str) and re.fullmatch(H.KNOWN_TOOLS_MATCHER, tool):
+    if isinstance(tool, str) and re.fullmatch(PC.KNOWN_TOOLS_MATCHER, tool):
         if any(name == tool and fmt == 'off' for name, fmt in settings.mcp_tools):
             return None
         return 'tavily'
@@ -245,16 +238,11 @@ def tool_kind(tool, settings):
 
 
 # --- retry state (hashes only) -------------------------------------------------------------------------------------
-def normalize_query(q):
-    return ' '.join(unicodedata.normalize('NFKC', q).casefold().split())
+normalize_query = PC.normalize_text      # the retry key hashes this normalized form
 
 
 def default_state_dir(env):
-    data = env.get('CLAUDE_PLUGIN_DATA')
-    if isinstance(data, str) and data.strip():
-        return os.path.join(data, STATE_DIRNAME)
-    uid = os.getuid() if hasattr(os, 'getuid') else 'user'
-    return os.path.join(tempfile.gettempdir(), f'{N.PLUGIN_NAME}-{STATE_DIRNAME}-{uid}')
+    return PC.state_dir(env, STATE_DIRNAME)
 
 
 class RetryState:
@@ -454,8 +442,8 @@ class _Caller:
         from .keys import CredentialMissing
         s, env = self.settings, self.env
         wall = s.wall_budget_seconds
-        endpoint_var = H._present(env, H.ENDPOINT_ENVS)
-        key_var = H._present(env, H.KEY_ENVS)
+        endpoint_var = PC.present(env, PC.ENDPOINT_ENVS)
+        key_var = PC.present(env, PC.KEY_ENVS)
         cfg = AdapterConfig(transport='real' if self.transport is None else 'fake', backend='choice_endpoint',
                             trace_dir='unused', timeout_seconds=min(H.REQUEST_TIMEOUT_SECONDS, wall),
                             choice_endpoint_id=env[endpoint_var].strip(),
@@ -622,9 +610,9 @@ def process(payload, settings, env, transport=None, clock=time.perf_counter, sle
     if not pending:
         return done('explicit_request_keep' if gate is not None and gate['status'] == 'explicit_request_keep'
                     else 'unchanged')
-    if H._present(env, H.KEY_ENVS) is None:
+    if PC.present(env, PC.KEY_ENVS) is None:
         return done('missing_key')
-    if H._present(env, H.ENDPOINT_ENVS) is None:
+    if PC.present(env, PC.ENDPOINT_ENVS) is None:
         return done('missing_endpoint')
     if settings.usd_per_second is None:
         return done('missing_rate')
@@ -700,7 +688,7 @@ def main(stdin=None, stdout=None, stderr=None, env=None, transport=None, exit_fn
     timed_out = False
     if payload is not None:
         t0 = clock()
-        ok, value = H.run_with_budget(
+        ok, value = PC.run_with_budget(
             lambda: process(payload, settings, env, transport, clock, sleep, now, state_dir, prompt_state_dir,
                             toggle_file),
             settings.wall_budget_seconds)
@@ -722,7 +710,7 @@ def main(stdin=None, stdout=None, stderr=None, env=None, transport=None, exit_fn
         rec['data_dir_id'] = T.data_dir_id(T.data_dir(env))
     except Exception:  # noqa: BLE001
         pass
-    H._emit_log(rec, settings, stderr)
+    PC.emit_json(rec, stderr, getattr(settings, 'log_file', None), ensure_ascii=False)
     if timed_out:
         exit_fn(0)        # nothing was printed: the tool call goes through the normal permission flow
     return 0

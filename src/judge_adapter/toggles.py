@@ -38,6 +38,7 @@ from __future__ import annotations
 import os
 import time
 
+from . import plugin_common as PC      # stdlib only, nothing heavy at import (this module is on the fast path)
 from . import plugin_names as N
 
 FILE_NAME = 'toggles.json'
@@ -47,8 +48,8 @@ FEATURES = ('filter', 'gate', 'domain')
 MODES = ('ask', 'input_only')
 ALLOWED_KEYS = frozenset(FEATURES + ('domain_mode', 'v', 'updated'))
 LOCK_WAIT_SECONDS = 5.0
-OPTION_PREFIXES = ('CLAUDE_PLUGIN_OPTION_', N.ENV_PREFIX)
-_TRUE, _FALSE = ('1', 'true', 'yes', 'on'), ('0', 'false', 'no', 'off')
+OPTION_PREFIXES = PC.OPTION_PREFIXES
+_TRUE, _FALSE = PC.TRUE_WORDS, PC.FALSE_WORDS
 # userConfig flag per feature (None: the feature has no own flag; on unless the global switch is off).
 USERCONFIG_FLAG = {'filter': None, 'gate': 'search_gate_enabled', 'domain': 'domain_presets_enabled'}
 
@@ -152,17 +153,13 @@ def read(path):
 
 
 # --- effective settings ----------------------------------------------------------------------------------------------
-def option(env, key):
-    """userConfig option as the hooks see it: CLAUDE_PLUGIN_OPTION_<KEY>, then JUDGE_ADAPTER_HOOK_<KEY>."""
-    for p in OPTION_PREFIXES:
-        v = env.get(p + key.upper())
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
+option = PC.option      # userConfig option as the hooks see it: CLAUDE_PLUGIN_OPTION_<KEY>, then JUDGE_ADAPTER_HOOK_<KEY>
 
 
 def flag_value(v):
-    """'true' / 'false' / None (unset) / 'invalid' -- lenient: the hooks report invalid values themselves."""
+    """'true' / 'false' / None (unset) / 'invalid' -- lenient: the hooks report invalid values themselves. Not
+    ``plugin_common.parse_flag`` on purpose: that one raises ConfigError (the hooks' config_error path), while status
+    and the effective settings must still work with an invalid ``enabled`` (it counts as on here)."""
     if v is None:
         return None
     s = str(v).strip().lower()

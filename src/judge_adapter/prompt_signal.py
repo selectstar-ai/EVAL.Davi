@@ -59,8 +59,8 @@ import os
 import sys
 import tempfile
 import time
-import unicodedata
 
+from . import plugin_common as PC
 from . import plugin_names as N
 from . import query_presets as Q
 
@@ -73,8 +73,7 @@ PRUNE_LIMIT = 200
 MAX_STATE_BYTES = 1024
 
 
-def normalize(text):
-    return ' '.join(unicodedata.normalize('NFKC', text).casefold().split())
+normalize = PC.normalize_text
 
 
 def explicit_request(prompt):
@@ -97,11 +96,7 @@ def _h(s, n=None):
 
 
 def default_state_dir(env):
-    data = env.get('CLAUDE_PLUGIN_DATA')
-    if isinstance(data, str) and data.strip():
-        return os.path.join(data, STATE_DIRNAME)
-    uid = os.getuid() if hasattr(os, 'getuid') else 'user'
-    return os.path.join(tempfile.gettempdir(), f'{N.PLUGIN_NAME}-{STATE_DIRNAME}-{uid}')
+    return PC.state_dir(env, STATE_DIRNAME)
 
 
 class PromptState:
@@ -235,7 +230,13 @@ class PromptState:
             pass
 
     def prune(self, skip=None):
-        """Best effort: remove session files and temp files older than a day."""
+        """Best effort: remove session files and temp files older than a day.
+
+        TODO (known defect #5, recorded 2026-10-11, not fixed; S3 candidate): this unlinks a day-old session's
+        ``.lock`` without taking that lock, and ``_lock`` lacks ``query_hook.RetryState._acquire``'s inode re-check
+        after acquiring. A process still holding (or waiting on) the old lock and a new process locking a freshly
+        created file can then both hold "the" session lock at once. Fix like RetryState: unlink only while holding
+        the lock, and re-check ``fstat(fd).st_ino == stat(path).st_ino`` after acquiring."""
         cutoff = self.now() - PRUNE_AGE_SECONDS
         try:
             with os.scandir(self.root) as it:
@@ -256,20 +257,7 @@ class PromptState:
 
 # --- entry point ---------------------------------------------------------------------------------------------------
 def _emit(rec, env, stderr):
-    line = json.dumps(rec, sort_keys=True)
-    try:
-        print(line, file=stderr)
-    except Exception:  # noqa: BLE001
-        pass
-    for p in ('CLAUDE_PLUGIN_OPTION_', N.ENV_PREFIX):
-        path = env.get(p + 'LOG_FILE')
-        if isinstance(path, str) and path.strip():
-            try:
-                with open(os.path.expanduser(path.strip()), 'a', encoding='utf-8') as f:
-                    f.write(line + '\n')
-            except OSError:
-                pass
-            break
+    PC.emit_json(rec, stderr, PC.option(env, 'log_file'), ensure_ascii=True)     # ASCII log lines, as before
 
 
 def main(stdin=None, stderr=None, env=None, now=time.time, state_dir=None):

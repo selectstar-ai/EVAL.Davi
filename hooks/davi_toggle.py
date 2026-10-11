@@ -149,7 +149,7 @@ def _onoff(b):
 
 def status(opts, env, out):
     T, H, QH = _load('toggles'), _load('plugin_hook'), _load('query_hook')
-    N = _load('plugin_names')
+    N, PC = _load('plugin_names'), _load('plugin_common')
     man = manifest()
     ucfg = man.get('userConfig') or {}
     sensitive = {k for k, v in ucfg.items() if isinstance(v, dict) and v.get('sensitive')}
@@ -178,7 +178,7 @@ def status(opts, env, out):
     w(f'domain mode: {eff.domain_mode} [{eff.sources["domain_mode"]}]')
     for k, default, lo, hi in (('search_gate_threshold', 0.85, 0.5, 1.0), ('domain_min_confidence', 0.6, 0.0, 1.0)):
         try:
-            w(f'{k}: {H._num(cfg(k), k, default, lo, hi)} [{cfg.source(k)}]')
+            w(f'{k}: {PC.parse_num(cfg(k), k, default, lo, hi)} [{cfg.source(k)}]')
         except Exception:  # noqa: BLE001
             w(f'{k}: invalid [{cfg.source(k)}]')
             warn.append(f'{k} is invalid: the query-stage hook reports config_error and changes nothing')
@@ -201,8 +201,8 @@ def status(opts, env, out):
                     'block the search')
 
     visible = any(k.startswith(T.OPTION_PREFIXES) for k in env)
-    for label, names in (('key (runpod_api_key)', H.KEY_ENVS), ('endpoint (choice_endpoint_id)', H.ENDPOINT_ENVS)):
-        if H._present(env, names):
+    for label, names in (('key (runpod_api_key)', PC.KEY_ENVS), ('endpoint (choice_endpoint_id)', PC.ENDPOINT_ENVS)):
+        if PC.present(env, names):
             w(f'{label}: set')
         elif visible:
             w(f'{label}: missing')

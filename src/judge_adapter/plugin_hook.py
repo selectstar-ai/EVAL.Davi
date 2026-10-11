@@ -64,15 +64,21 @@ import logging
 import os
 import re
 import sys
-import threading
 import time
 from dataclasses import dataclass
 
+from . import plugin_common as PC
 from . import plugin_names as N
+# Shared contracts, re-exported under their existing names (option reading, env names, the Tavily matcher, the
+# strict number parser and the wall-budget runner live in plugin_common). Module-level aliases: this module's own
+# functions look them up here at call time, so patching e.g. ``plugin_hook._num`` still affects ``load_settings``.
+from .plugin_common import (ENDPOINT_ENVS, KEY_ENVS, KNOWN_TOOLS_MATCHER, OPTION_ENV, TAVILY_TOOL,  # noqa: F401
+                            ConfigError, run_with_budget)
 
-OPTION_ENV = 'CLAUDE_PLUGIN_OPTION_'           # Claude Code exports every userConfig option as this + KEY.upper()
-KEY_ENVS = (OPTION_ENV + 'RUNPOD_API_KEY', 'RUNPOD_API_KEY')
-ENDPOINT_ENVS = (OPTION_ENV + 'CHOICE_ENDPOINT_ID', 'JUDGE_ADAPTER_CHOICE_ENDPOINT_ID')
+option = PC.option
+_present = PC.present
+_num = PC.parse_num
+
 DEFAULT_PRESET = 'v1-thr0.3-dev'
 ALL_DROPPED_MODES = ('keep_original', 'drop_all')
 REQUEST_TIMEOUT_SECONDS = 15.0                 # per HTTP request; also capped by the wall budget
@@ -87,60 +93,14 @@ LIST_KEYS = ('results', 'items', 'documents', 'organic', 'organic_results', 'hit
              'sources')
 QUERY_KEYS = ('query', 'q', 'search_query')
 
-# Verified search tool (tavily-mcp 0.2.22 registers only "tavily_search"). hooks/hooks.json uses this verbatim.
-TAVILY_TOOL = 'tavily_search'
-KNOWN_TOOLS_MATCHER = '^mcp__[A-Za-z0-9_-]+__' + TAVILY_TOOL + '$'
 FORMATS = ('tavily', 'off')
 
 
-class ConfigError(ValueError):
-    pass
-
-
 # --- settings ------------------------------------------------------------------------------------------------------
-def option(env, key):
-    """userConfig option ``key``: CLAUDE_PLUGIN_OPTION_<KEY>, then JUDGE_ADAPTER_HOOK_<KEY>. Empty -> None."""
-    for name in (OPTION_ENV + key.upper(), N.ENV_PREFIX + key.upper()):
-        v = env.get(name)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
-
-
-def _present(env, names):
-    """Name of the first set variable (presence only; the value is not returned)."""
-    for n in names:
-        v = env.get(n)
-        if isinstance(v, str) and v.strip():
-            return n
-    return None
-
-
 def _bool(v, default):
-    if v is None:
-        return default
-    s = v.strip().lower()
-    if s in ('1', 'true', 'yes', 'on'):
-        return True
-    if s in ('0', 'false', 'no', 'off'):
-        return False
-    raise ConfigError('enabled must be true or false')
-
-
-def _num(v, name, default, lo, hi, cast=float):
-    if v is None:
-        return default
-    try:
-        x = float(v)
-    except ValueError:
-        raise ConfigError(f'{name} must be a number') from None
-    if cast is int:
-        if x != int(x):
-            raise ConfigError(f'{name} must be an integer')
-        x = int(x)
-    if not lo <= x <= hi:
-        raise ConfigError(f'{name} must be in [{lo}, {hi}]')
-    return x
+    """The global ``enabled`` switch, strict (an invalid value is a ConfigError here; toggles.flag_value is
+    lenient on purpose)."""
+    return PC.parse_flag(v, 'enabled', default)
 
 
 @dataclass(frozen=True)
@@ -630,35 +590,7 @@ def process(payload, settings, env, transport=None, clock=time.perf_counter, sle
 
 # --- entry point ---------------------------------------------------------------------------------------------------
 def _emit_log(rec, settings, stderr):
-    line = json.dumps(rec, ensure_ascii=False, sort_keys=True)
-    try:
-        print(line, file=stderr)
-    except Exception:  # noqa: BLE001
-        pass
-    path = getattr(settings, 'log_file', None)
-    if path:
-        try:
-            with open(os.path.expanduser(path), 'a', encoding='utf-8') as f:
-                f.write(line + '\n')
-        except OSError:
-            pass
-
-
-def run_with_budget(fn, seconds):
-    """Run ``fn`` in a daemon thread. -> (finished, value). An exception counts as finished with value None."""
-    box = {}
-
-    def target():
-        try:
-            box['value'] = fn()
-        except Exception as e:  # noqa: BLE001 - fail-open
-            box['error'] = type(e).__name__
-    t = threading.Thread(target=target, daemon=True)
-    t.start()
-    t.join(seconds)
-    if t.is_alive():
-        return False, None
-    return True, box.get('value', ('error', box.get('error')))
+    PC.emit_json(rec, stderr, getattr(settings, 'log_file', None), ensure_ascii=False)
 
 
 def main(stdin=None, stdout=None, stderr=None, env=None, transport=None, exit_fn=os._exit, clock=time.perf_counter,
