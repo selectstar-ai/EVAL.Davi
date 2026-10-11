@@ -106,8 +106,10 @@ def normalize_text(text):
 
 
 # --- process -----------------------------------------------------------------------------------------------------------
-def emit_json(rec, stderr, log_path=None, ensure_ascii=True):
-    """One JSON log line on ``stderr`` and, if ``log_path`` is set, appended to that file. Never raises for I/O."""
+def emit_json(rec, stderr, log_path=None, *, ensure_ascii):
+    """One JSON log line on ``stderr`` and, if ``log_path`` is set, appended to that file. Never raises for I/O.
+    ``ensure_ascii`` has no default on purpose: the PostToolUse/PreToolUse hooks log non-ASCII as is (False), the
+    UserPromptSubmit hook logs ASCII (True); each caller states it."""
     import json
     line = json.dumps(rec, ensure_ascii=ensure_ascii, sort_keys=True)
     try:
@@ -123,7 +125,8 @@ def emit_json(rec, stderr, log_path=None, ensure_ascii=True):
 
 
 def run_with_budget(fn, seconds):
-    """Run ``fn`` in a daemon thread. -> (finished, value). An exception counts as finished with value None."""
+    """Run ``fn`` in a daemon thread. -> (finished, value). An exception inside ``fn`` counts as finished with value
+    ``('error', <exception class name>)``; a non-Exception exit (e.g. SystemExit) gives ``('error', None)``."""
     import threading
     box = {}
 
