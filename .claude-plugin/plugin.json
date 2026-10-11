@@ -1,6 +1,6 @@
 {
   "name": "davi",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Filters Tavily MCP search results (tavily-mcp 0.2.22, tool tavily_search) before the model reads them: one choice-model call per result scores P(keep), and results below the preset threshold are removed. Fail-open: on any error the result is left unchanged. Optional and off by default (experimental): a search gate and domain presets that run before WebSearch or tavily_search.",
   "author": {
     "name": "hundredeuk2",

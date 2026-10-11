@@ -2,7 +2,7 @@
 
 [README](../README.md) · [Claude Code plugin](plugin.md) · [Reference](reference.md) · [한국어](ko.md)
 
-This page records how each part of the `davi` plugin and the query-stage options was checked for 0.4.0. "Observed"
+This page records how each part of the `davi` plugin and the query-stage options was checked (0.4.0 behaviour; 0.4.1 adds no behaviour change except the prompt-state race fix below). "Observed"
 means seen in a real Claude Code session, usually once; it is not a measured rate. Fake tests use in-process fake
 endpoints and synthetic content. No row is a quality claim.
 
@@ -47,6 +47,14 @@ endpoints and synthetic content. No row is a quality claim.
   was left unchanged (fail-open observed). The cause was not established and the remote job's cost is unsettled. The
   smoke harness missed this in-hook timeout as a stop condition, so two further sessions ran (a deviation, kept as
   recorded).
+
+## 0.4.1 additions
+
+| What | How it was checked | Result |
+|---|---|---|
+| Prompt-state race (pruning a day-old session lock held or waited on; a fresh explicit state deleted by a concurrent prune) | Three deterministic barrier-ordered multi-process tests (`tests/test_prompt_state_race.py`), run against the code before and after the fix; plus an independent read-only review with repeated runs under CPU load | Failed before, pass after. Applies where `fcntl` is available; a leftover empty `.lock` file is still possible in a rare ordering (no effect on correctness) |
+| Internal restructuring (`plugin_common`, `gate.JobLedger`) | Byte-for-byte comparison of hook output, logs, state files and cost caps on 76 fixed fake cases; the 0.4.0 test suite run against the new code | Identical; no real-session re-run |
+| Environment | Tests: 550 passed, 4 skipped (FastChat modules skipped: optional extra and checkout not present) | FastChat paths not verified in this environment |
 
 ## Full table
 

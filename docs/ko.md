@@ -2,7 +2,7 @@
 
 [README (영문)](../README.md) · [상세 레퍼런스](reference.md) · [Claude Code plugin](plugin.md) · [검증 현황](verification.md)
 
-아래는 0.4.0 기준 전체 한국어 요약이다. 영문 상세: 컨텍스트 필터·pairwise judge·설정과 한계는 [reference.md](reference.md), plugin 설치·설정·검색 전 옵션·기능 켜고 끄기는 [plugin.md](plugin.md), 실제 실행·fake 테스트·미검증 구분은 [verification.md](verification.md).
+아래는 0.4.0 기준 전체 한국어 요약이다(0.4.1은 동작 변경 없이 내부 구조 정리[공통 hook 계약을 stdlib 전용 `plugin_common`으로, 필터 원장을 `gate.JobLedger`로 이동 — 76개 고정 fake 사례에서 출력·로그·상태·비용 상한 바이트 동일]과 검색 gate 프롬프트 상태의 경쟁 조건 수정[하루 지난 세션 정리를 그 세션 잠금 보유 중에만, 잠금 후 inode 재확인; fcntl 환경 한정]을 더했다. 테스트 550 통과, FastChat 4개는 미실행). 영문 상세: 컨텍스트 필터·pairwise judge·설정과 한계는 [reference.md](reference.md), plugin 설치·설정·검색 전 옵션·기능 켜고 끄기는 [plugin.md](plugin.md), 실제 실행·fake 테스트·미검증 구분은 [verification.md](verification.md).
 
 마켓플레이스 이름이 `judge-adapter`에서 `datumo`로 바뀌어 설치 id는 `davi@datumo`다(모델·선택 정책 변경 없음; 설치 id와 기본 상태
 저장 위치가 바뀜). 기존 `davi@judge-adapter` 설치의 설정·toggle·상태는 이어받지 않으며 plugin이 옮기거나 지우지 않는다. 둘 다

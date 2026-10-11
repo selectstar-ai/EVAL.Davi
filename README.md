@@ -183,6 +183,24 @@ Any other tool, incl. built-in WebSearch: not matched (zero intervention)
 Details: [context filter](docs/reference.md#context-filter), [pairwise judge](docs/reference.md#pairwise-judge-adapter),
 [plugin hook](docs/plugin.md#what-the-hook-changes), [configuration and limits](docs/reference.md#configuration-and-limits).
 
+## What changed in 0.4.1
+
+No model, selection-policy or plugin-option change. Internal restructuring and one concurrency fix:
+
+- Hook contracts shared by the plugin (option reading, env names, flag/number parsing, state directory, log line,
+  time budget) moved into one stdlib-only module, `plugin_common`; the run-wide filter ledger moved to
+  `gate.JobLedger`. Hook output, logs, state files and cost caps were compared byte for byte before and after on 76
+  fixed fake cases (identical). Total lines grew slightly (+52 in the touched modules); the gain is fewer copies and
+  no private cross-module imports, not size.
+- Fixed a race in the search gate's prompt state: pruning now deletes a day-old session file only while holding that
+  session's lock (non-blocking; skipped if busy), and the lock inode is re-checked after locking. Three deterministic
+  multi-process scenarios failed before the fix and pass after it. This applies where `fcntl` is available (not on
+  Windows); temporary files and the no-`fcntl` path are handled as before.
+- `docs/` now ships in the source distribution, so the README's links resolve there.
+- Tests: 550 passed, 4 skipped (the FastChat modules, which need the optional extra and a checkout, were not run).
+  The repository moved to `selectstar-ai/EVAL.Davi` and the install identifier is `davi@datumo` (see
+  [Claude Code plugin](#claude-code-plugin)).
+
 ## Further work
 
 Follow-up candidates, not a committed roadmap and not instructions to run anything:
@@ -191,7 +209,7 @@ Follow-up candidates, not a committed roadmap and not instructions to run anythi
    presets in an interactive session; the `/davi:filter-*` and `/davi:domain-mode-*` commands in a real session; a
    real run in which the filter drops results and the model receives the shorter result; general preservation of user
    intent by the search gate.
-2. Conditional, separate candidates: merge reference-answer (pointwise) grading support, which is not part of 0.4.0;
+2. Conditional, separate candidates: merge reference-answer (pointwise) grading support, which is not part of 0.4.1;
    resume the multi-turn evaluation, on hold because of license constraints on the evaluation corpus.
 
 ## Citation
@@ -203,7 +221,7 @@ If you use this software, please cite the repository:
   author  = {hundredeuk2},
   title   = {judge-adapter: context filtering and pairwise LLM-judge calls},
   year    = {2026},
-  version = {0.4.0},
+  version = {0.4.1},
   url     = {https://github.com/selectstar-ai/EVAL.Davi}
 }
 ```
