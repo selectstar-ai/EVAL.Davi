@@ -12,7 +12,7 @@ Contents: [Names](#names) · [Installation details](#installation-details) · [C
 | Import | `judge_adapter` |
 | JSONL CLI | `judge-adapter` (also `python -m judge_adapter.cli`) |
 | FastChat wrapper CLI (optional) | `judge-adapter-fastchat` (needs the `fastchat` extra) |
-| Claude Code plugin | `davi` (filters Tavily MCP search results; optional query-stage options, off by default), marketplace `judge-adapter` |
+| Claude Code plugin | `davi` (filters Tavily MCP search results; optional query-stage options, off by default), marketplace `datumo` |
 | License | Apache-2.0 (see `LICENSE` and `NOTICE`) |
 
 ## Installation details
@@ -583,7 +583,7 @@ observed `input_only` domain application); `ask`, the default, remains unverifie
 judge-adapter/
 ├── .claude-plugin/
 │   ├── plugin.json              # plugin manifest: name, version, userConfig
-│   └── marketplace.json         # marketplace "judge-adapter" listing the plugin (source "./")
+│   └── marketplace.json         # marketplace "datumo" listing the plugin (source "./")
 ├── hooks/
 │   ├── hooks.json               # PostToolUse: tavily_search; PreToolUse: WebSearch + tavily_search; UserPromptSubmit
 │   ├── context_filter_hook.py   # stdlib launcher -> judge_adapter.plugin_hook (exits at once when toggled off)

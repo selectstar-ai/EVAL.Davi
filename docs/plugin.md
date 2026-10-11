@@ -48,11 +48,17 @@ docs is not matched).
 
 ```bash
 claude plugin marketplace add selectstar-ai/EVAL.Davi
-claude plugin install davi@judge-adapter
+claude plugin install davi@datumo
 ```
 
-The install id is `<plugin>@<marketplace>`: plugin `davi`, marketplace `judge-adapter`. Inside a session,
-`/plugin marketplace add selectstar-ai/EVAL.Davi` and `/plugin install davi@judge-adapter` do the same.
+The install id is `<plugin>@<marketplace>`: plugin `davi`, marketplace `datumo`. Inside a session,
+`/plugin marketplace add selectstar-ai/EVAL.Davi` and `/plugin install davi@datumo` do the same.
+
+The marketplace was renamed from `judge-adapter` to `datumo` (no model or selection-policy change; the install
+identifier and the default state location change). A `davi@datumo` install has its own data directory
+(`~/.claude/plugins/data/davi-datumo/`) and does not inherit the settings, toggles or state of an earlier
+`davi@judge-adapter` install; the plugin never moves, deletes or modifies the old install or its files. If both are
+active, the hooks may run twice: check `/plugin` and keep only one.
 
 Add the Tavily MCP server as a local stdio server, **pinned to the verified version** (never an unpinned `npx`
 latest). The key is your own Tavily API key from tavily.com; `--env` stores it in your Claude Code MCP configuration,
@@ -72,9 +78,9 @@ The hook runs `python3` (exec form, no shell) and needs **httpx** in that interp
 python3 -m pip install "httpx>=0.24,<1"
 
 # B) a private venv in the plugin's data directory (used automatically when python3 lacks httpx).
-#    The directory is ~/.claude/plugins/data/<id>/ with <id> = "davi@judge-adapter" with every character other than
-#    a letter, digit, _ or - replaced by "-", i.e. ~/.claude/plugins/data/davi-judge-adapter/
-D=~/.claude/plugins/data/davi-judge-adapter
+#    The directory is ~/.claude/plugins/data/<id>/ with <id> = "davi@datumo" with every character other than
+#    a letter, digit, _ or - replaced by "-", i.e. ~/.claude/plugins/data/davi-datumo/
+D=~/.claude/plugins/data/davi-datumo
 python3 -m venv "$D/venv" && "$D/venv/bin/pip" install "httpx>=0.24,<1"
 #    or with uv:  uv venv "$D/venv" && uv pip install --python "$D/venv/bin/python" "httpx>=0.24,<1"
 ```
@@ -88,7 +94,7 @@ must resolve to a real executable.
 ## Configure
 
 Claude Code prompts for the plugin's options when it is enabled; later, use `/plugin` → the plugin → **Configure
-options**, or `claude plugin configure davi@judge-adapter`. The key and endpoint ID are `sensitive`: Claude Code keeps
+options**, or `claude plugin configure davi@datumo`. The key and endpoint ID are `sensitive`: Claude Code keeps
 them in secure storage, not in `settings.json`. Prefer the dialog for them, so they do not land in shell history.
 
 | Option (`userConfig`) | Default | Meaning |
@@ -325,7 +331,7 @@ its UserPromptSubmit hook), the domain toggle only the domain presets.
 | (none) | `... davi_toggle.py reset` | Remove the toggle file; the userConfig values apply again |
 
 **Where and how wide:** one file, `${CLAUDE_PLUGIN_DATA}/toggles.json` (0600). For the marketplace install that is
-`~/.claude/plugins/data/davi-judge-adapter/toggles.json`; the shell CLI uses `--data-dir DIR`, else
+`~/.claude/plugins/data/davi-datumo/toggles.json`; the shell CLI uses `--data-dir DIR`, else
 `CLAUDE_PLUGIN_DATA`, else that path. A `--plugin-dir` session has another plugin id and data directory, so pass
 `--data-dir` there (the slash commands always use the session's own `${CLAUDE_PLUGIN_DATA}`). The toggles are
 **install-wide, not per session**: a change applies to every session and project using that data directory,
@@ -346,7 +352,7 @@ as `FAILED` (exit 1), never as success. No `fcntl` (Windows): changes are refuse
 
 **What `status` reads and shows:** the toggle file; userConfig values from the environment when present (hook
 processes get `CLAUDE_PLUGIN_OPTION_*`, the Bash tool does not), then the non-sensitive values Claude Code saved under
-`pluginConfigs["davi@judge-adapter"].options` in `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`;
+`pluginConfigs["davi@datumo"].options` in `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`;
 only that block and only this plugin's non-sensitive option names are used), then the manifest defaults. It shows
 filter / gate / domain on/off with their source, the domain mode, the thresholds, the filter preset, the domain
 preset names (never the domains or a file path), the rate as set/missing, and the key and endpoint ID as

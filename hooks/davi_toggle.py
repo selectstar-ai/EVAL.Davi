@@ -11,13 +11,13 @@ Usage (also run by the plugin's /davi:* commands through ``bin/davi-toggle``)::
     python3 hooks/davi_toggle.py [--data-dir DIR] reset
 
 It edits ONLY ``<data dir>/toggles.json`` (see ``judge_adapter/toggles.py``): ``--data-dir`` if given and non-empty,
-else ``CLAUDE_PLUGIN_DATA``, else ``~/.claude/plugins/data/davi-judge-adapter``. The file is install-wide: a change
+else ``CLAUDE_PLUGIN_DATA``, else ``~/.claude/plugins/data/davi-datumo``. The file is install-wide: a change
 applies to every session that uses this data directory, including running ones, from their next hook call. Keys, the
 endpoint ID and the rate are userConfig-only and never written here.
 
 ``status`` reads, besides the toggle file: the userConfig values the environment carries (``CLAUDE_PLUGIN_OPTION_*``,
 ``JUDGE_ADAPTER_HOOK_*``; hooks get these, the Bash tool does not), then the NON-sensitive values Claude Code saved
-under ``pluginConfigs["davi@judge-adapter"].options`` in the user settings file (``$CLAUDE_CONFIG_DIR/settings.json``
+under ``pluginConfigs["davi@datumo"].options`` in the user settings file (``$CLAUDE_CONFIG_DIR/settings.json``
 or ``~/.claude/settings.json``; only that block is used and only the plugin's non-sensitive option names), then the
 manifest defaults. Sensitive values (key, endpoint ID) live in secure storage and reach only hook processes: status
 reports them as "set" / "missing" when the environment shows them, else as "not visible here". It never prints a key,

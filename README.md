@@ -24,11 +24,11 @@ pip install "judge-adapter[fastchat] @ git+https://github.com/selectstar-ai/EVAL
 From a source checkout: `pip install .` (or `pip install -e ".[test]"` for development). Pinned FastChat revision
 and install checks: [reference](docs/reference.md#installation-details).
 
-Claude Code plugin (`davi`, marketplace `judge-adapter`):
+Claude Code plugin (`davi`, marketplace `datumo`):
 
 ```bash
 claude plugin marketplace add selectstar-ai/EVAL.Davi
-claude plugin install davi@judge-adapter
+claude plugin install davi@datumo
 claude mcp add --transport stdio --env TAVILY_API_KEY="$TAVILY_API_KEY" tavily -- npx -y tavily-mcp@0.2.22
 ```
 
@@ -36,6 +36,10 @@ The hook runs `python3` and needs **httpx** in that interpreter (or in a private
 directory); see [plugin install](docs/plugin.md#install). It also needs your own Jev-compatible choice endpoint
 (RunPod key, endpoint ID and per-second rate, set in [Configure](docs/plugin.md#configure)); without them it sends
 nothing and changes nothing.
+
+The marketplace is now `datumo` (install id `davi@datumo`). A `davi@datumo` install does not inherit the settings,
+toggles or state of an earlier `davi@judge-adapter` install, and nothing moves or removes the old one. If both are
+active, the hooks may run twice: check `/plugin` and keep only one.
 
 ## About
 

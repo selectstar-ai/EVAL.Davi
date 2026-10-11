@@ -4,6 +4,10 @@
 
 아래는 0.4.0 기준 전체 한국어 요약이다. 영문 상세: 컨텍스트 필터·pairwise judge·설정과 한계는 [reference.md](reference.md), plugin 설치·설정·검색 전 옵션·기능 켜고 끄기는 [plugin.md](plugin.md), 실제 실행·fake 테스트·미검증 구분은 [verification.md](verification.md).
 
+마켓플레이스 이름이 `judge-adapter`에서 `datumo`로 바뀌어 설치 id는 `davi@datumo`다(모델·선택 정책 변경 없음; 설치 id와 기본 상태
+저장 위치가 바뀜). 기존 `davi@judge-adapter` 설치의 설정·toggle·상태는 이어받지 않으며 plugin이 옮기거나 지우지 않는다. 둘 다
+켜져 있으면 hook이 두 번 실행될 수 있으므로 `/plugin`에서 하나만 남긴다.
+
 - **무엇인가:** 두 기능을 담은 패키지다. (1) **컨텍스트 필터**: 검색 문서마다 선택지 모델에 한 번 물어 P(keep)을
   받고 기준 이상만 넘겨 agent의 **입력 토큰을 줄인다**. (2) **pairwise judge 어댑터**: 질문 하나(1~2 turn)와 응답
   두 개를 넣으면 `A`/`B`/`tie`/명시 `error`와 호출 기록을 남긴다. JSONL CLI(`judge-adapter`), Python API(`import
@@ -22,7 +26,7 @@
   않았다. 같은 HLE 실행에서 72회 검색 중 25회는 5문서가 모두 drop되었다(그 실행의 검색 단위 관찰이며 일반 drop률·실패율이
   아님). 용도는 opt-in 입력 축소 도구이며 품질 향상·총비용 절감을 주장하지 않는다.
 - **Claude Code plugin `davi`:** `claude plugin marketplace add selectstar-ai/EVAL.Davi` 후 `claude plugin install
-  davi@judge-adapter`. 대상은 **Tavily MCP의 `tavily_search` 하나**다(`tavily-mcp` npm 0.2.22, 소스 commit `1c1d54c`에서
+  davi@datumo`. 대상은 **Tavily MCP의 `tavily_search` 하나**다(`tavily-mcp` npm 0.2.22, 소스 commit `1c1d54c`에서
   출력 형식 확인). 서버 별칭과 상관없이 `^mcp__[A-Za-z0-9_-]+__tavily_search$`로만 매칭하고, 다른 도구(다른 Tavily 도구·
   다른 검색 MCP·읽기/쓰기 도구·내장 WebSearch)에는 전혀 개입하지 않는다(결과 필터 기준; 검색 전 선택 옵션은 아래 항목). **Claude Code 내장 WebSearch는 필터하지
   않는다**: 한 번의 실제 실행에서 결과마다 제목·URL만 있고 본문이 없었다(점수 매길 텍스트 없음). Tavily 서버 추가는 버전을
@@ -100,7 +104,7 @@
   `/davi:domain-mode-input-only`, 셸에서는 `python3 <plugin>/hooks/davi_toggle.py filter|gate|domain on|off`,
   `domain-mode ask|input_only`, `status`, `reset`(엄격한 인자 검사).
   세 기능은 서로 독립이다(filter off가 gate/domain을 끄지 않음). 파일은 `${CLAUDE_PLUGIN_DATA}/toggles.json` 하나(0600,
-  마켓플레이스 설치는 `~/.claude/plugins/data/davi-judge-adapter/`, `--plugin-dir` 세션은 다른 디렉터리이므로
+  마켓플레이스 설치는 `~/.claude/plugins/data/davi-datumo/`, `--plugin-dir` 세션은 다른 디렉터리이므로
   `--data-dir` 지정)이며 **세션별이 아니라 설치 전체 공유**라서 이미 실행 중인 다른 세션에도 다음 hook 호출부터 적용된다.
   우선순위: (1) userConfig `enabled=false`는 세 기능을 모두 끄고 어떤 toggle도 이를 넘지 못한다, (2) 그 외에는 toggle
   파일이 정한 키, (3) 나머지는 userConfig/환경변수. 파일이 없으면 toggle 없음, 손상·읽기 불가면 hook은 무시하고 userConfig를

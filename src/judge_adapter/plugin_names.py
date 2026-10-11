@@ -9,7 +9,7 @@ checks that the manifests agree with this module). The hook code itself reads na
 ``CLAUDE_PLUGIN_OPTION_<KEY>`` comes from Claude Code and follows the ``userConfig`` keys, not the plugin name.
 """
 PLUGIN_NAME = 'davi'                 # plugin.json "name"; install id is PLUGIN_NAME@MARKETPLACE_NAME
-MARKETPLACE_NAME = 'judge-adapter'   # marketplace.json "name" (neutral working name: the repository name)
+MARKETPLACE_NAME = 'datumo'          # marketplace.json "name"; also sets the default data dir (davi-datumo)
 INSTALL_ID = f'{PLUGIN_NAME}@{MARKETPLACE_NAME}'
 
 # Fallback environment variables for running the hook outside a plugin (e.g. from settings.json hooks).

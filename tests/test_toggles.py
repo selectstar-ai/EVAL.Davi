@@ -109,6 +109,44 @@ def test_cli_data_dir_resolution(tmp_path):
     assert T.data_dir({'CLAUDE_PLUGIN_DATA': str(tmp_path / 'p')}, '') == str(tmp_path / 'p')     # empty -> env
 
 
+def test_default_data_dir_derives_from_the_marketplace_name(tmp_path):
+    from judge_adapter import plugin_names as N
+    assert N.MARKETPLACE_NAME == 'datumo' and N.INSTALL_ID == 'davi@datumo'
+    expected = tmp_path / '.claude' / 'plugins' / 'data' / 'davi-datumo'
+    # conftest patches T.default_data_dir in-process (real user files are never touched), so check it in a subprocess
+    probe = subprocess.run([sys.executable, '-c', 'import sys; from judge_adapter import toggles as T; '
+                            'print(T.default_data_dir(home=sys.argv[1]))', str(tmp_path)],
+                           capture_output=True, text=True, timeout=30,
+                           env={'PATH': os.environ.get('PATH', ''), 'PYTHONPATH': str(ROOT / 'src')})
+    assert probe.returncode == 0 and probe.stdout.strip() == str(expected)
+    # the CLI without --data-dir / CLAUDE_PLUGIN_DATA writes under the derived default, never the old install's dir
+    r = subprocess.run([sys.executable, str(CLI), 'gate', 'on'], capture_output=True, text=True, timeout=30,
+                       env={'PATH': os.environ.get('PATH', ''), 'HOME': str(tmp_path)})
+    assert r.returncode == 0 and json.loads((expected / T.FILE_NAME).read_text())['gate'] is True
+    assert not (tmp_path / '.claude' / 'plugins' / 'data' / 'davi-judge-adapter').exists()
+
+
+@pytest.mark.parametrize('dirname', ['injected', 'davi-inline'])
+def test_injected_plugin_data_takes_precedence_over_the_default(tmp_path, dirname):
+    # 'davi-inline' is the data dir Claude Code gives a --plugin-dir session (plugin id davi@inline)
+    injected = tmp_path / '.claude' / 'plugins' / 'data' / dirname
+    env = {'PATH': os.environ.get('PATH', ''), 'HOME': str(tmp_path), 'CLAUDE_PLUGIN_DATA': str(injected)}
+    r = subprocess.run([sys.executable, str(CLI), 'filter', 'off'], capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0 and str(injected / T.FILE_NAME) in r.stdout
+    assert json.loads((injected / T.FILE_NAME).read_text())['filter'] is False
+    assert not (tmp_path / '.claude' / 'plugins' / 'data' / 'davi-datumo').exists()
+    eff = T.effective_from_env({'CLAUDE_PLUGIN_DATA': str(injected)})
+    assert eff.filter is False and eff.sources['filter'] == 'toggle'
+
+
+def test_status_ignores_saved_options_of_the_old_install_id(tmp_path):
+    settings = tmp_path / 'settings.json'
+    settings.write_text(json.dumps({'pluginConfigs': {'davi@judge-adapter': {'options': {
+        'search_gate_threshold': 0.9}}}}))
+    rc, out, _ = cli('--data-dir', str(tmp_path / 'data'), 'status', env=cfg_env(tmp_path / 'data'), settings=settings)
+    assert rc == 0 and 'search_gate_threshold: 0.9' not in out and 'davi@datumo' in out
+
+
 def test_bin_wrapper_runs_the_cli_and_is_executable(tmp_path):
     wrapper = ROOT / 'bin' / 'davi-toggle'
     assert os.access(wrapper, os.X_OK)
@@ -118,7 +156,7 @@ def test_bin_wrapper_runs_the_cli_and_is_executable(tmp_path):
     # no --data-dir and no CLAUDE_PLUGIN_DATA (as in the Bash tool): the documented default under ~/.claude
     r = subprocess.run([str(wrapper), 'filter', 'off'], capture_output=True, text=True, timeout=30,
                        env={'PATH': os.environ.get('PATH', ''), 'HOME': str(tmp_path)})
-    default = tmp_path / '.claude' / 'plugins' / 'data' / 'davi-judge-adapter' / T.FILE_NAME
+    default = tmp_path / '.claude' / 'plugins' / 'data' / 'davi-datumo' / T.FILE_NAME
     assert r.returncode == 0 and str(default) in r.stdout and json.loads(default.read_text())['filter'] is False
     r = subprocess.run([sys.executable, str(CLI), '--data-dir', str(tmp_path / 'd'), 'gate', 'maybe'],
                        capture_output=True, text=True, timeout=30)
@@ -434,7 +472,7 @@ def test_status_never_prints_secrets_and_shows_sources(tmp_path):
     presets_file.write_text(json.dumps({'mine': {'description': 'Mine.', 'include_domains': ['hidden.example']}}))
     settings = tmp_path / 'settings.json'
     settings.write_text(json.dumps({'env': {'ANTHROPIC_API_KEY': 'sk-ant-SETTINGSSECRET'},
-                                    'pluginConfigs': {'davi@judge-adapter': {'options': {
+                                    'pluginConfigs': {'davi@datumo': {'options': {
                                         'runpod_api_key': 'rpa_SAVEDSECRET', 'domain_presets': str(presets_file),
                                         'domain_presets_enabled': True, 'search_gate_threshold': 0.9}}}}))
     e = cfg_env(tmp_path / 'data')
@@ -451,7 +489,7 @@ def test_status_never_prints_secrets_and_shows_sources(tmp_path):
 
 def test_status_shows_non_runnable_states(tmp_path):
     settings = tmp_path / 'settings.json'
-    settings.write_text(json.dumps({'pluginConfigs': {'davi@judge-adapter': {'options': {
+    settings.write_text(json.dumps({'pluginConfigs': {'davi@datumo': {'options': {
         'domain_presets': '{"x": {"description": "d", "include_domains": ["https://bad/path"]}}'}}}}))
     e = cfg_env(tmp_path / 'data', runpod_api_key=None, usd_per_second=None)
     _set(tmp_path / 'data', domain=True)

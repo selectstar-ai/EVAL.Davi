@@ -3,9 +3,9 @@
 """On/off toggles for the davi plugin's three features, kept in one small user-local file. Standard library only.
 
 The file ``toggles.json`` lives in the plugin's data directory (``${CLAUDE_PLUGIN_DATA}``; Claude Code resolves it to
-``~/.claude/plugins/data/<id>/``, ``<id>`` = ``davi@judge-adapter`` with every character other than a letter, digit,
+``~/.claude/plugins/data/<id>/``, ``<id>`` = ``davi@datumo`` with every character other than a letter, digit,
 ``_`` or ``-`` replaced by ``-``, see https://code.claude.com/docs/en/plugins/components "Reference plugin paths and
-store data"). Without ``CLAUDE_PLUGIN_DATA`` the documented default ``~/.claude/plugins/data/davi-judge-adapter`` is
+store data"). Without ``CLAUDE_PLUGIN_DATA`` the documented default ``~/.claude/plugins/data/davi-datumo`` is
 used. One file per plugin data directory: the toggles are **install-wide**, shared by every session (and every
 project) that uses this data directory, including sessions that are already running (from their next hook call).
 
