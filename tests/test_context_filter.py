@@ -495,3 +495,91 @@ def test_tool_executor_example_runs(capsys):
     runpy.run_path(str(path), run_name='__main__')
     out = capsys.readouterr().out
     assert '"omitted_ids": ["s2"]' in out and 'Unrelated recipe' in out and 'not a model run' in out
+
+
+# --- run-wide ledger (gate.JobLedger; formerly context_filter._Ledger) ------------------------------------------------
+def test_ledger_lives_in_gate_without_new_public_api_or_import_cycle():
+    import subprocess
+    import sys
+
+    import judge_adapter
+    from judge_adapter import gate as G
+    assert F._Ledger is G.JobLedger
+    assert 'JobLedger' not in judge_adapter.__all__ and not hasattr(G, '__all__')
+    assert (F.JOB_RESERVATION_SECONDS, F.IDLE_ALLOWANCE_SECONDS, F.JobTime) == \
+        (G.JOB_RESERVATION_SECONDS, G.IDLE_ALLOWANCE_SECONDS, G.JobTime)
+    for first in ('judge_adapter.gate', 'judge_adapter.context_filter', 'judge_adapter.query_hook'):
+        code = (f'import importlib, sys; importlib.import_module({first!r}); '
+                'import judge_adapter.context_filter as F, judge_adapter.gate as G; assert F._Ledger is G.JobLedger')
+        r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, (first, r.stderr)
+    from pathlib import Path
+    src = Path(G.__file__).read_text(encoding='utf-8')
+    assert 'context_filter' not in ''.join(x for x in src.splitlines(True) if x.lstrip().startswith(('import', 'from')))
+    assert '_Ledger' not in (Path(G.__file__).parent / 'query_hook.py').read_text(encoding='utf-8')
+
+
+CAP_GRID = [(usd, n, wall) for usd in (1e-12, 0.0004, 0.00031, 0.000123456789, 1 / 3, 0.5, 1.0)
+            for n in (1, 2, 3, 7, 10, 50, 1000) for wall in (1, 1.0, 13.7, 20.0, 37.3, 59.999, 60, 0.1 + 0.2)]
+
+
+def test_cap_constants_give_bit_identical_caps():
+    """The hooks' cap ``usd * (n * 661 + 60 + wall) * 1.0001`` now names the gate constants; same value, same
+    evaluation order, so the float result is bit-identical."""
+    from judge_adapter.gate import IDLE_ALLOWANCE_SECONDS, JOB_RESERVATION_SECONDS
+    assert JOB_RESERVATION_SECONDS == 661 and IDLE_ALLOWANCE_SECONDS == 60
+    for usd, n, wall in CAP_GRID:
+        old = usd * (n * 661 + 60 + wall) * 1.0001
+        new = usd * (n * JOB_RESERVATION_SECONDS + IDLE_ALLOWANCE_SECONDS + wall) * 1.0001
+        assert old == new and repr(old) == repr(new), (usd, n, wall)
+
+
+@pytest.mark.parametrize('n', [1, 2, 3, 5, 10])
+@pytest.mark.parametrize('wall', [1.0, 20.0, 60.0])
+def test_hook_cap_admits_exactly_n_full_reservations(n, wall):
+    from judge_adapter.gate import IDLE_ALLOWANCE_SECONDS, JOB_RESERVATION_SECONDS, JobLedger
+    usd = 0.0004
+    cap = usd * (n * JOB_RESERVATION_SECONDS + IDLE_ALLOWANCE_SECONDS + wall) * 1.0001
+    led = JobLedger(usd, cap, None, lambda: 100.0)
+    tickets = []
+    while True:
+        t, why = led.admit()
+        if t is None:
+            break
+        tickets.append(t)
+    assert len(tickets) == n and led.stopped['code'] == 'budget_cap'
+    tight = JobLedger(usd, usd * (n * JOB_RESERVATION_SECONDS + IDLE_ALLOWANCE_SECONDS) * 0.9999, None, lambda: 100.0)
+    assert sum(1 for _ in range(n) if tight.admit()[0] is not None) == n - 1
+
+
+def test_hooks_pass_the_same_cap_to_the_ledger(monkeypatch, tmp_path):
+    import io
+
+    from judge_adapter import gate as G
+    from judge_adapter import plugin_hook as H
+    from judge_adapter import prompt_signal as PS
+    from judge_adapter import query_hook as QH
+    seen = []
+    real = G.JobLedger.__init__
+    monkeypatch.setattr(G.JobLedger, '__init__', lambda self, rate, cap, m, clock: seen.append((rate, cap, m)) or
+                        real(self, rate, cap, m, clock))
+    e = {'CLAUDE_PLUGIN_OPTION_RUNPOD_API_KEY': 'rpa_X', 'CLAUDE_PLUGIN_OPTION_CHOICE_ENDPOINT_ID': 'ep',
+         'CLAUDE_PLUGIN_OPTION_USD_PER_SECOND': '0.00031', 'CLAUDE_PLUGIN_OPTION_WALL_BUDGET_SECONDS': '37.3',
+         'CLAUDE_PLUGIN_DATA': str(tmp_path)}
+    resp = {'results': [{'title': f't{i}', 'url': f'https://example.invalid/{i}', 'snippet': f'body {i} [[KEEP=0.9]]'}
+                        for i in range(7)]}
+    fake = fakes.FakeRelevanceEndpoint()
+    H.main(stdin=io.StringIO(json.dumps({'hook_event_name': 'PostToolUse', 'tool_name': 'WebSearch',
+                                         'tool_input': {'query': 'q'}, 'tool_response': resp})),
+           stdout=io.StringIO(), stderr=io.StringIO(), env=e, transport=httpx.MockTransport(fake.handle),
+           exit_fn=lambda c: None)
+    from test_query_hook import FakeChoice
+    PS.PromptState(str(tmp_path / PS.STATE_DIRNAME)).on_prompt('s1', 'Tell me about zebra lanterns, in detail.')
+    QH.main(stdin=io.StringIO(json.dumps({'session_id': 's1', 'hook_event_name': 'PreToolUse', 'tool_name': 'WebSearch',
+                                          'tool_input': {'query': 'zebra lantern glow'}})),
+            stdout=io.StringIO(), stderr=io.StringIO(),
+            env={**e, 'CLAUDE_PLUGIN_OPTION_SEARCH_GATE_ENABLED': 'true', 'CLAUDE_PLUGIN_OPTION_DOMAIN_PRESETS_ENABLED':
+                 'true'}, transport=httpx.MockTransport(FakeChoice(domain={'docs': 0.9, 'none': 0.1}).handle),
+            exit_fn=lambda c: None)
+    assert seen == [(0.00031, 0.00031 * (7 * 661 + 60 + 37.3) * 1.0001, 7),
+                    (0.00031, 0.00031 * (2 * 661 + 60 + 37.3) * 1.0001, 2)]

@@ -594,7 +594,7 @@ judge-adapter/
 ├── commands/                    # fixed commands: /davi:status, /davi:{filter,gate,domain}-{on,off}, /davi:domain-mode-*
 ├── bin/davi-toggle              # runs hooks/davi_toggle.py; on the Bash tool PATH while the plugin is enabled
 ├── src/judge_adapter/
-│   ├── context_filter.py        # ContextFilter, policies, preset, budget ledger
+│   ├── context_filter.py        # ContextFilter, policies, preset
 │   ├── plugin_hook.py           # PostToolUse hook: parse Tavily results, filter, rebuild, fail-open
 │   ├── query_hook.py            # PreToolUse hook: optional search gate and domain presets (off by default)
 │   ├── query_presets.py         # EXPERIMENTAL wording, example presets, guard and explicit-request patterns
@@ -605,7 +605,7 @@ judge-adapter/
 │   ├── backends.py              # haiku_direct and choice_endpoint backends (httpx, retries 0)
 │   ├── core.py                  # JudgeAdapter, build_backend, trace writer
 │   ├── contract.py              # AdapterConfig, request / result types
-│   ├── gate.py                  # RunGate: run-wide submission and cost limits
+│   ├── gate.py                  # RunGate, JobLedger: run-wide submission and cost limits
 │   ├── keys.py                  # key loading and scrubbing
 │   ├── prompt.py, user_prompt.py  # fixed judge prompts, rubric / reference prompt
 │   ├── cli.py                   # judge-adapter JSONL CLI

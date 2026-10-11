@@ -436,9 +436,9 @@ class _Caller:
         self.backend = self.ledger = None
 
     def _setup(self):
-        from .context_filter import _Ledger
         from .contract import AdapterConfig
         from .core import build_backend
+        from .gate import IDLE_ALLOWANCE_SECONDS, JOB_RESERVATION_SECONDS, JobLedger
         from .keys import CredentialMissing
         s, env = self.settings, self.env
         wall = s.wall_budget_seconds
@@ -458,8 +458,8 @@ class _Caller:
             return v
         self.backend = build_backend(cfg, transport=self.transport, key_provider=key_provider, clock=self.clock,
                                      sleep=self.sleep)
-        cap = s.usd_per_second * (self.n_calls * 661 + 60 + wall) * 1.0001
-        self.ledger = _Ledger(self.backend.usd_per_second, cap, self.n_calls, self.clock)
+        cap = s.usd_per_second * (self.n_calls * JOB_RESERVATION_SECONDS + IDLE_ALLOWANCE_SECONDS + wall) * 1.0001
+        self.ledger = JobLedger(self.backend.usd_per_second, cap, self.n_calls, self.clock)
 
     def ask(self, prompt, query, options):
         """options: [(label, text)] -> {'outcome', 'probs' (label -> p) or None, 'label', 'calls', 'server_ms'}"""

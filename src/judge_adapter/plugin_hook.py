@@ -537,6 +537,7 @@ def process(payload, settings, env, transport=None, clock=time.perf_counter, sle
     from .contract import AdapterConfig
     from .context_filter import PRESETS, ContextFilter, Document, FilterInputError
     from .core import build_backend
+    from .gate import IDLE_ALLOWANCE_SECONDS, JOB_RESERVATION_SECONDS
     from .keys import CredentialMissing
 
     if settings.preset not in PRESETS:
@@ -558,8 +559,9 @@ def process(payload, settings, env, transport=None, clock=time.perf_counter, sle
 
     backend = build_backend(cfg, transport=transport, key_provider=key_provider, clock=clock, sleep=sleep)
     # Client-side estimate cap per hook call: enough to admit every scored document at full reservation (the
-    # ContextFilter ledger reserves 661 s per open job + 60 s idle); a hook call is one ContextFilter run.
-    cap = settings.usd_per_second * (len(scored) * 661 + 60 + wall) * 1.0001
+    # ContextFilter ledger, gate.JobLedger, reserves JOB_RESERVATION_SECONDS = 661 s per open job plus
+    # IDLE_ALLOWANCE_SECONDS = 60 s idle); a hook call is one ContextFilter run.
+    cap = settings.usd_per_second * (len(scored) * JOB_RESERVATION_SECONDS + IDLE_ALLOWANCE_SECONDS + wall) * 1.0001
     limits = dataclasses.replace(PRESETS[settings.preset].limits, oversize='flag', max_docs=max(1, len(scored)))
     flt = ContextFilter(cfg, backend, preset=settings.preset, limits=limits, budget_cap_usd=cap,
                         max_submissions=len(scored), concurrency=settings.concurrency, logger=None, clock=clock)

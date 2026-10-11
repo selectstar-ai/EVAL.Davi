@@ -1,6 +1,7 @@
 # Copyright 2026 hundredeuk2
 # SPDX-License-Identifier: Apache-2.0
-"""Pre-submission CLIENT-SIDE cost gate and stop rules around one backend (RunGate), plus its estimate helpers.
+"""Pre-submission CLIENT-SIDE cost gate and stop rules around one backend (RunGate), plus its estimate helpers and
+the thread-safe choice-endpoint ledger (JobLedger) used by ContextFilter and the plugin's query-stage hook.
 
 NOT an account billing cap: the real charge is visible only in the Anthropic / RunPod consoles. No worker control.
 Not a general budget framework: one backend, one sequential run, one cap.
@@ -21,6 +22,7 @@ held, and the run stops. Reservations of jobs that were actually transmitted are
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 from . import contract as C
@@ -72,6 +74,86 @@ class JobTime:
         sec = JOB_RESERVATION_SECONDS if d is None or e is None else (d + e) / 1000.0 + ROUNDING_ALLOWANCE_SECONDS
         self.settled_seconds += sec
         return sec
+
+
+class JobLedger:
+    """Run-wide CLIENT-SIDE estimate and stop rules for one choice endpoint (same estimate as RunGate: wall clock since
+    the first submission + idle allowance + full reservation of every unsettled job). Thread-safe: every admission
+    is one atomic check-and-reserve. NOT an account billing cap."""
+
+    def __init__(self, rate, cap_usd, max_submissions, clock):
+        self.lock = threading.Lock()
+        self.job_time = JobTime(rate or 0.0, clock)
+        self.cap = float('inf') if cap_usd is None else float(cap_usd)
+        self.max_submissions = max_submissions
+        self.admitted = 0                  # reserved submissions (in flight + done)
+        self.submissions = self.status_polls = self.cancels = 0
+        self.stopped = None                # {'code', 'detail'}
+        self.unsettled = []
+        self.n = 0
+
+    def _stop(self, code, detail):
+        if self.stopped is None:
+            self.stopped = {'code': code, 'detail': detail}
+
+    def admit(self):
+        """-> (label, None) if reserved, else (None, why)."""
+        with self.lock:
+            if self.stopped:
+                return None, f'stopped earlier ({self.stopped["code"]})'
+            if self.max_submissions is not None and self.admitted + 1 > self.max_submissions:
+                self._stop('max_submissions', f'max_submissions {self.max_submissions} reached')
+                return None, self.stopped['detail']
+            idle = 0.0 if self.job_time.first_submit is not None else IDLE_ALLOWANCE_SECONDS
+            need = self.job_time.usd(JOB_RESERVATION_SECONDS + idle)
+            if need > self.cap + 1e-12:
+                self._stop('budget_cap', f'estimate with reservation ${need:.6f} > cap ${self.cap:.6f}')
+                return None, self.stopped['detail']
+            self.n += 1
+            label = f'job-{self.n}'
+            first_before = self.job_time.first_submit
+            self.job_time.reserve(label)
+            self.admitted += 1
+            return (label, first_before), None
+
+    def settle(self, ticket, r):
+        label, first_before = ticket
+        with self.lock:
+            if r.get('outcome') == C.LOCAL_CONFIG and not r.get('submissions'):
+                self.job_time.unsettled.pop(label, None)        # nothing was transmitted: release, hold nothing
+                self.admitted -= 1
+                if first_before is None and not self.job_time.unsettled and self.job_time.settled_seconds == 0.0 \
+                        and self.submissions == 0:
+                    self.job_time.first_submit = None
+                self._stop('local_config', str(r.get('detail')))
+                return
+            self.submissions += r.get('submissions', 0)
+            self.status_polls += r.get('status_polls', 0)
+            self.cancels += r.get('cancels', 0)
+            if r.get('job_final'):
+                self.job_time.settle(label, r.get('server_timing'))
+                if not isinstance((r.get('server_timing') or {}).get('execution_ms'), (int, float)):
+                    self._stop('usage_unknown', 'job final without server execution time; cost unknown (full '
+                                                'reservation charged)')
+            else:
+                self.unsettled.append({'label': label, 'job_observed_final': False,
+                                       'unsettled_reservation_seconds': JOB_RESERVATION_SECONDS,
+                                       'cancel_sent': bool(r.get('cancels'))})
+                self._stop('unsettled_job', f'job not observed final ({r.get("outcome")}); its full reservation '
+                                            'stays held')
+            if r.get('outcome') == C.CONTRACT:
+                self._stop('contract', 'contract failure')
+
+    def snapshot(self):
+        with self.lock:
+            return {'kind': 'CLIENT-SIDE ESTIMATE for this ContextFilter run; NOT the bill and NOT an account billing '
+                            'cap', 'cap_usd': None if self.cap == float('inf') else self.cap,
+                    'max_submissions': self.max_submissions, 'submissions': self.submissions,
+                    'status_polls': self.status_polls, 'cancels': self.cancels, 'retries': 0,
+                    'committed_usd': self.job_time.usd(), 'usd_per_second_configured': self.job_time.rate,
+                    'job_reservation_seconds': JOB_RESERVATION_SECONDS, 'idle_allowance_seconds': IDLE_ALLOWANCE_SECONDS,
+                    'settled_seconds': self.job_time.settled_seconds, 'unsettled_jobs': list(self.unsettled),
+                    'stopped': dict(self.stopped) if self.stopped else None}
 
 
 class RunGate:
