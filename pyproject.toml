@@ -65,6 +65,7 @@ include = [
     "/bin",
     "/.claude-plugin",
     "/README.md",
+    "/docs",
     "/LICENSE",
     "/NOTICE",
     "/pyproject.toml",
