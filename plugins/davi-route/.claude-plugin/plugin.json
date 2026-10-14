@@ -1,0 +1,31 @@
+{
+  "name": "davi-route",
+  "version": "0.5.0-dev",
+  "description": "EXPERIMENTAL routing hooks for measuring a verifier inside Claude Code. A: after an Agent (subagent) call, a verifier scores the result and, below a threshold, asks for a re-run with the strong model. E: before an Agent call, sets the subagent model (cheap first; the strong model after an escalation). B: at Stop, a verifier checks completion and can block the stop once. All off by default and fail-open. Load with --plugin-dir from an EVAL.Davi checkout.",
+  "author": {
+    "name": "hundredeuk2",
+    "url": "https://github.com/hundredeuk2"
+  },
+  "homepage": "https://github.com/selectstar-ai/EVAL.Davi",
+  "repository": "https://github.com/selectstar-ai/EVAL.Davi",
+  "license": "Apache-2.0",
+  "keywords": ["routing", "verifier", "hooks", "subagent", "experimental"],
+  "userConfig": {
+    "route_enabled": {"type": "boolean", "title": "A + E: subagent routing", "description": "Verify Agent results (PostToolUse) and set the subagent model (PreToolUse).", "default": false},
+    "route_judge": {"type": "string", "title": "Routing judge", "description": "davi | jev | claude | fake", "default": "davi"},
+    "route_threshold": {"type": "number", "title": "Escalate below P(accept)", "description": "Pre-fixed experimental value, not calibrated.", "default": 0.5, "min": 0, "max": 1},
+    "route_cheap_model": {"type": "string", "title": "Cheap subagent model", "description": "Model string for the first attempt (e.g. haiku).", "default": "haiku"},
+    "route_strong_model": {"type": "string", "title": "Strong subagent model", "description": "Model string after an escalation (e.g. opus).", "default": "opus"},
+    "route_pin_cheap": {"type": "string", "title": "Pin the cheap model", "description": "always | if_unset | off: when to set the cheap model on an Agent call without a pending escalation.", "default": "always"},
+    "route_post_mode": {"type": "string", "title": "How an escalation is signalled", "description": "context (additionalContext) | block (decision block + reason).", "default": "context"},
+    "stop_verify_enabled": {"type": "boolean", "title": "B: completion check at Stop", "description": "Verify completion when the agent stops; block once below the threshold.", "default": false},
+    "stop_threshold": {"type": "number", "title": "Block stop below P(complete)", "description": "Pre-fixed experimental value, not calibrated.", "default": 0.5, "min": 0, "max": 1},
+    "stop_max_blocks": {"type": "number", "title": "Max blocked stops per request", "description": "Loop guard (0-5).", "default": 1, "min": 0, "max": 5},
+    "log_file": {"type": "string", "title": "Log file (JSONL)", "description": "One line per hook call: probabilities, decisions, models, latency, estimated judge cost. No text.", "default": ""},
+    "runpod_api_key": {"type": "string", "title": "RunPod API key (davi judge)", "description": "Key for your choice endpoint.", "sensitive": true},
+    "choice_endpoint_id": {"type": "string", "title": "Choice endpoint ID (davi judge)", "description": "RunPod serverless endpoint ID.", "sensitive": true},
+    "usd_per_second": {"type": "number", "title": "Endpoint price USD/s (davi judge)", "description": "Required for the davi judge.", "min": 0},
+    "typesafe_api_key": {"type": "string", "title": "TypeSafe API key (jev judge)", "description": "Bearer key for api.typesafe.ai.", "sensitive": true},
+    "anthropic_api_key": {"type": "string", "title": "Anthropic API key (claude judge)", "description": "Used only by the claude judge.", "sensitive": true}
+  }
+}

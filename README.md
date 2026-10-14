@@ -3,7 +3,7 @@
 **Spend fewer input tokens on retrieved context: a choice model scores each search result, and only the results
 worth reading reach the agent.** Also a pairwise LLM-judge adapter with fixed options, retries 0 and run-wide limits.
 
-[Docs](docs/) · [Plugin](docs/plugin.md) · [Verification](docs/verification.md) · [한국어](docs/ko.md) ·
+[Docs](docs/) · [Plugin](docs/plugin.md) · [Verification](docs/verification.md) · [Routing (experimental)](docs/routing.md) · [한국어](docs/ko.md) ·
 [GitHub](https://github.com/selectstar-ai/EVAL.Davi)
 
 ## Installation
