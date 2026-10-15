@@ -297,6 +297,46 @@ def test_both_mode_checks_only_what_went_to_the_cheap_model(tmp_path):
         settings(route_mode='sometimes')
 
 
+def test_tier_kind_on_systemone_claude_and_runpod():
+    def davi(req):
+        q = json.loads(req.content)['questions']['route']
+        assert q['type'] == 'choice' and list(q['criteria']) == ['1', '2', '3', '4', '5']
+        return httpx.Response(200, json={'answers': {'route': {'probabilities': {
+            '1': 0.0, '2': 0.0, '3': 0.5, '4': 0.5, '5': 0.0}}}})
+    r = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test'}, transport=httpx.MockTransport(davi)) \
+        .verify('Who wrote Hamlet?', kind='tier')
+    assert r.outcome == 'ok' and r.level == pytest.approx(0.625) and r.p_accept == pytest.approx(0.375)
+    seen = []
+    c = V.ClaudeVerifier(lambda: KEY, model='claude-haiku-5-5',
+                         transport=claude_transport(seen, 'Probably hard for it.\n\n4')).verify('q', kind='tier')
+    assert c.level == pytest.approx(0.75) and '1 to 5' in json.loads(seen[0].content)['messages'][0]['content']
+    env = {'DAVI_ROUTE_RUNPOD_API_KEY': KEY, 'DAVI_ROUTE_CHOICE_ENDPOINT_ID': 'ep1', 'DAVI_ROUTE_USD_PER_SECOND': '0.001'}
+    assert V.build_verifier('davi', env, transport=davi_transport([])).verify('q', kind='tier').outcome == 'error'
+
+
+def test_tiers_mode_picks_one_of_three_models_and_checks_only_the_cheap_one(tmp_path):
+    st, ver = RH.State(str(tmp_path)), V.FakeVerifier()
+    s = settings(route_mode='tiers', route_tier_low=0.4, route_tier_high=0.8)
+
+    def pre(p_easy):
+        pl = agent_payload('PreToolUse', model='sonnet')
+        pl['tool_input']['prompt'] = f'task [[ACCEPT={p_easy}]]'          # fake: level = 1 - p
+        return RH.process_pre(pl, s, st, ver)
+    for p_easy, model, tier in ((0.9, 'haiku', 'cheap'), (0.5, 'sonnet', 'mid'), (0.1, 'opus', 'strong')):
+        out, rec = pre(p_easy)
+        assert rec['tier'] == tier and rec['source'] == 'tier_route' and ver.calls[-1]['kind'] == 'tier'
+        assert (out or {}).get('hookSpecificOutput', {}).get('updatedInput', {}).get('model', 'sonnet') == model
+    out, rec = RH.process_post(agent_payload('PostToolUse', model='haiku'), s, ver, st)
+    assert out is None and rec['status'] == 'mode_tiers'                         # no check unless asked
+    checked = settings(route_mode='tiers', route_tier_check='true')
+    out, rec = RH.process_post(agent_payload('PostToolUse', model='haiku'), checked, ver, st)
+    assert rec['decision'] == 'escalate'
+    out, rec = RH.process_post(agent_payload('PostToolUse', model='sonnet'), checked, ver, st)
+    assert out is None and rec['reason'] == 'not_cheap'
+    with pytest.raises(RH.ConfigError):
+        settings(route_mode='tiers', route_tier_low=0.9, route_tier_high=0.2)
+
+
 def test_harness_pre_judging_and_its_cost(tmp_path):
     tasks, cache = build_cache(tmp_path)
     marked = [Hn.Task(t.id, t.prompt + (' [[ACCEPT=0.9]]' if int(t.id[1:]) % 2 == 0 else ' [[ACCEPT=0.1]]'))

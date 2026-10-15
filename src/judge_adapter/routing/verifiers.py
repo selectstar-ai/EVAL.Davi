@@ -19,7 +19,8 @@ Kinds: ``answer`` (can this answer be used as final, or should a stronger model 
 agent's task actually complete, or should it continue?) and ``pre`` (from the task alone, before any answer: will the
 lower-cost model get it right, or should the task go to the stronger model directly?). In all of them option ``accept``
 means "keep / stop / send to the cheap model" and option ``escalate`` means "redo with a stronger model / continue /
-send to the strong model".
+send to the strong model". ``tier`` is graded instead: from the task alone, how hard is it for a small model (five
+levels, reported as ``level`` in [0, 1] and ``p_accept`` = 1 - level), for routing over three models.
 
 No verifier raises: every failure is a Verdict with ``p_accept=None`` and ``outcome`` naming the reason. Keys are read
 lazily at the first request and are scrubbed from every detail string.
@@ -74,7 +75,26 @@ KINDS = {
     },
 }
 # kinds judged from the task alone (no candidate answer)
-TASK_ONLY_KINDS = ('pre',)
+TASK_ONLY_KINDS = ('pre', 'tier')
+
+# 'tier': a graded difficulty for 3-tier routing (cheap / mid / strong model). One choice question with five levels;
+# the verdict's ``level`` is the expected level scaled to [0, 1] (0 = trivial for a small model, 1 = almost surely
+# wrong) and ``p_accept`` is 1 - level. Same wording as the KLEAR experiment that set the default cut-offs.
+TIER_INSTRUCTIONS = ('Rate how hard the task in "task" is for a small, fast AI model answering from memory with no '
+                     'tools.')
+TIER_LEVELS = (('1', '1: trivial for it.'), ('2', '2: easy.'), ('3', '3: uncertain, about even odds.'),
+               ('4', '4: hard, likely wrong.'), ('5', '5: very hard, almost surely wrong.'))
+KINDS['tier'] = {'instructions': TIER_INSTRUCTIONS}
+CLAUDE_TIER_FORMAT_LINE = 'Reply with only one integer from 1 to 5: the rating. No other text.'
+
+
+def tier_level(probs):
+    """Expected level in [0, 1] from {'1': p, ..., '5': p}; None if a level is missing."""
+    ps = [probs.get(k) if isinstance(probs, dict) else None for k, _ in TIER_LEVELS]
+    if any(not isinstance(x, (int, float)) or isinstance(x, bool) or x < 0 for x in ps) or sum(ps) <= 0:
+        return None
+    total = sum(ps)
+    return sum(x / total * j / (len(ps) - 1) for j, x in enumerate(ps))
 
 # Several phrasings of the same pre question, asked in ONE /v1/systemone call; P(accept) is the mean of their
 # logits (an ensemble; no weights fitted). name -> (instructions, {option: description}, option meaning "accept").
@@ -142,6 +162,7 @@ class Verdict:
     model: str | None = None
     usage: dict | None = None
     detail: str | None = None
+    level: float | None = None          # kind 'tier' only: expected difficulty in [0, 1]
 
     def to_dict(self):
         return dataclasses.asdict(self)
@@ -169,6 +190,8 @@ def state_of(task, candidate, rubric=None, max_chars=DEFAULT_MAX_CHARS):
 
 def semantic_input(kind, task, candidate, rubric=None, max_chars=DEFAULT_MAX_CHARS):
     """The choice-endpoint semantic input (same shape ``ChoiceEndpointBackend`` sends for the context filter)."""
+    if kind == 'tier':
+        raise ValueError('kind tier needs a /v1/systemone judge (DAVI_BASE_URL); the RunPod choice endpoint is binary')
     k = KINDS[kind]
     return {'turn': 1, 'instructions': k['instructions'], 'state': state_of(task, candidate, rubric, max_chars),
             'criteria': {'opt_accept': k['accept'], 'opt_escalate': k['escalate']}, 'question_id': QUESTION_ID}
@@ -311,6 +334,9 @@ class JevVerifier(_HttpJudge):
             qs = {f'{QUESTION_ID}_{n}': {'type': 'choice', 'instructions': ins, 'criteria': crit}
                   for n, (ins, crit, _) in PRE_ENSEMBLE.items()}
             return {'state': st, 'model': self.model, 'questions': qs}
+        if kind == 'tier':
+            return {'state': st, 'model': self.model, 'questions': {QUESTION_ID: {
+                'type': 'choice', 'instructions': TIER_INSTRUCTIONS, 'criteria': dict(TIER_LEVELS)}}}
         k = KINDS[kind]
         return {'state': st, 'model': self.model,
                 'questions': {QUESTION_ID: {'type': 'choice', 'instructions': k['instructions'],
@@ -342,6 +368,12 @@ class JevVerifier(_HttpJudge):
             return Verdict(self.name, kind, p, 'ok', lat, cost, js.get('model'), usage)
         ans = (js.get('answers') or {}).get(QUESTION_ID)
         probs = ans.get('probabilities') if isinstance(ans, dict) else None
+        if kind == 'tier':
+            lvl = tier_level(probs)
+            if lvl is None:
+                return Verdict(self.name, kind, None, 'format_error', lat, cost, js.get('model'), usage,
+                               f'no level probabilities in answers.{QUESTION_ID}')
+            return Verdict(self.name, kind, 1.0 - lvl, 'ok', lat, cost, js.get('model'), usage, level=lvl)
         p = probs.get('accept') if isinstance(probs, dict) else None
         if not isinstance(p, (int, float)) or isinstance(p, bool) or not 0.0 <= p <= 1.0 + 1e-9:
             return Verdict(self.name, kind, None, 'format_error', lat, cost, js.get('model'), usage,
@@ -392,7 +424,10 @@ class ClaudeVerifier(_HttpJudge):
         parts = [k['instructions'], '']
         for f, v in state_of(task, candidate, rubric, self.max_chars).items():
             parts += [f'<{f}>', v, f'</{f}>', '']
-        parts += ['Options:', f'accept: {k["accept"]}', f'escalate: {k["escalate"]}', '', CLAUDE_FORMAT_LINE]
+        if kind == 'tier':
+            parts += ['Ratings:'] + [d for _, d in TIER_LEVELS] + ['', CLAUDE_TIER_FORMAT_LINE]
+        else:
+            parts += ['Options:', f'accept: {k["accept"]}', f'escalate: {k["escalate"]}', '', CLAUDE_FORMAT_LINE]
         return '\n'.join(parts)
 
     def body(self, task, candidate, rubric, kind):
@@ -413,6 +448,13 @@ class ClaudeVerifier(_HttpJudge):
         usage = {'input_tokens': u.get('input_tokens'), 'output_tokens': u.get('output_tokens')} if u else None
         cost = self._price(usage, self.p_in, self.p_out)
         out = ''.join(b.get('text', '') for b in js.get('content') or [] if isinstance(b, dict))
+        if kind == 'tier':
+            found = re.findall(r'\b[1-5]\b', out)
+            if not found:
+                return Verdict(self.name, kind, None, 'format_error', lat, cost, js.get('model'), usage,
+                               f'no 1-5 rating in reply {out[:40]!r}')
+            lvl = (int(found[-1]) - 1) / 4
+            return Verdict(self.name, kind, 1.0 - lvl, 'ok', lat, cost, js.get('model'), usage, level=lvl)
         p = parse_percent(out)
         if p is None:
             return Verdict(self.name, kind, None, 'format_error', lat, cost, js.get('model'), usage,
@@ -442,7 +484,7 @@ class FakeVerifier(_Base):
             return Verdict(self.name, kind, None, 'error', 0.0, None, detail='fake error')
         m = _ACCEPT_RE.search(seen or '')
         p = float(m.group(1)) if m else self.default
-        return Verdict(self.name, kind, p, 'ok', 0.0, self.cost_usd, 'fake')
+        return Verdict(self.name, kind, p, 'ok', 0.0, self.cost_usd, 'fake', level=1.0 - p if kind == 'tier' else None)
 
 
 # --- configuration -----------------------------------------------------------------------------------------------------

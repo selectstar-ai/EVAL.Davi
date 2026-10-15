@@ -16,7 +16,7 @@
 
 ## 판정자
 
-세 판정자 모두 같은 지시문과 같은 두 선택지(`accept` / `escalate`)를 받습니다. kind는 세 가지입니다.
+세 판정자 모두 같은 지시문을 받습니다. kind는 네 가지이고, `tier`만 선택지가 다섯 개입니다.
 
 - `answer`: "이 답을 최종 답으로 써도 되는가, 강한 모델이 다시 풀어야 하는가"
 - `completion`: "에이전트가 정말 요청을 끝냈는가, 계속해야 하는가"
@@ -40,6 +40,25 @@
 
   문구는 같은 데이터에서 두 번 골랐으므로 수치는 약간 낙관적일 수 있습니다. 반으로 나눠 한쪽에서 고르고 다른
   쪽에서 잰 값은 0.71~0.72였습니다. 여러 질문을 로지스틱으로 합치는 것(교차검증 0.706)은 평균보다 낫지 않았습니다.
+- `tier`: 답이 나오기 전에 과제만 보고 "작은 모델이 도구 없이 기억만으로 풀기에 얼마나 어려운가"를 1~5로
+  매깁니다(3단 라우팅용). 판정 결과의 `level`은 다섯 단계 확률로 낸 기대 단계를 0~1로 바꾼 값이고, `p_accept`는
+  `1 - level`입니다. Davi(`/v1/systemone`)는 단계별 확률을, Claude는 정수 하나를 답합니다. RunPod choice endpoint는
+  두 선택지만 받으므로 `tier`를 지원하지 않습니다(판정 실패로 처리). 하네스 결과는 `<judge>:tier`로 저장되며,
+  두 모델용 `analyze`/`demo`에서는 빠집니다.
+
+  KLEAR 174문항, haiku 5.5 / sonnet 5.5 / opus 5.5 각 1회(2026-10-15). sonnet만 쓰면 63.2%, 비용은 opus만의 60%.
+
+  | 3단 배정 (예산은 opus만 대비) | 70% | 80% |
+  |---|---|---|
+  | Davi `tier`, 반으로 나눠 기준을 고르고 다른 쪽에서 잰 정답률 | 68.7% | 69.9% |
+  | Claude Haiku 5.5 `tier`, 같은 방법 | 63.3% | 63.4% |
+  | (참고) haiku → Davi 답 판정 → opus (`post`) | 65.6% | 66.9% |
+  | (참고) opus만 | 71.8% | 71.8% |
+
+  기본 기준값(`route_tier_low` 0.48, `route_tier_high` 0.78)에서 Davi는 정답률 71.3%, 비용 70%, 문항당 9.7초
+  (opus만과 같은 속도)였습니다. 이 기준값은 이 데이터로 정했으므로 낙관적이고, 고난도 문항에 맞춘 값입니다. 쉬운
+  질문("대한민국의 수도는?", "2 더하기 2는?")은 0.03~0.09로 나와 cheap 모델로 갑니다. 다른 작업에 쓸 때는
+  기준값을 다시 맞추세요.
 
 | judge | 호출 | P의 출처 | 비용 추정 |
 |---|---|---|---|
@@ -73,7 +92,7 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 | hook | 이벤트 | 동작 |
 |---|---|---|
 | A `post` | PostToolUse, matcher `^(Agent\|Task)$` | (`route_mode`가 `post`/`both`일 때) `tool_input.prompt`와 서브에이전트 결과를 판정. 이미 강한 모델로 실행된 결과는 판정하지 않음. P < `route_threshold`이면 "model `opus`로 다시 위임하라"를 `additionalContext`(또는 `route_post_mode=block`이면 `decision: block`)로 전달하고, 세션의 다음 모델을 `opus`로 저장 |
-| E `pre` | PreToolUse, 같은 matcher | `updatedInput.model`을 설정. 저장된 다음 모델이 있으면 그것을 한 번 적용(에스컬레이션). 없으면 `route_mode`가 `pre`/`both`일 때 과제만 판정(kind `pre`)해 P < `route_pre_threshold`이면 strong, 아니면 cheap 모델. `post`일 때는 cheap 모델 고정(`route_pin_cheap`) |
+| E `pre` | PreToolUse, 같은 matcher | `updatedInput.model`을 설정. 저장된 다음 모델이 있으면 그것을 한 번 적용(에스컬레이션). 없으면 `route_mode`가 `pre`/`both`일 때 과제만 판정(kind `pre`)해 P < `route_pre_threshold`이면 strong, 아니면 cheap 모델. `tiers`일 때는 난이도(kind `tier`)로 cheap / mid / strong 중 하나. `post`일 때는 cheap 모델 고정(`route_pin_cheap`) |
 | B `stop` | Stop (SubagentStop은 `stop_subagents=true`일 때) | transcript의 마지막 사용자 요청과 `last_assistant_message`로 완료 여부를 판정. P < `stop_threshold`이면 한 번 `decision: block` + 사유. 요청별 카운터와 연속 block 체인 카운터로 루프 방지 |
 
 **E에 대하여**: hook은 메인 세션의 모델을 바꿀 수 없습니다(문서상 PreModelSwitch는 허용·차단만 가능). 대신 다음
@@ -88,7 +107,10 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 | 키 | 기본값 | 설명 |
 |---|---|---|
 | `route_enabled` | false | A + E 켜기/끄기 |
-| `route_mode` | post | `post`: cheap 먼저, 답을 판정해 필요하면 strong으로 재실행 / `pre`: 실행 전 과제만 판정해 cheap 또는 strong으로 바로 보냄(재실행 없음, 답을 보지 못함) / `both`: `pre`로 보낸 뒤 cheap으로 간 것만 답을 다시 판정 |
+| `route_mode` | post | `post`: cheap 먼저, 답을 판정해 필요하면 strong으로 재실행 / `pre`: 실행 전 과제만 판정해 cheap 또는 strong으로 바로 보냄(재실행 없음, 답을 보지 못함) / `both`: `pre`로 보낸 뒤 cheap으로 간 것만 답을 다시 판정 / `tiers`: 실행 전 난이도로 cheap / mid / strong 중 하나로 보냄 |
+| `route_mid_model` | sonnet | (`tiers`) 중간 난이도에 쓸 모델 |
+| `route_tier_low` / `route_tier_high` | 0.48 / 0.78 | (`tiers`) 난이도가 low 미만이면 cheap, high 이상이면 strong, 그 사이는 mid. KLEAR로 정한 값 |
+| `route_tier_check` | false | (`tiers`) cheap 모델로 간 답도 판정해 `route_threshold` 미만이면 strong으로 재실행 |
 | `route_judge` | davi | davi / jev / claude / fake |
 | `route_threshold` | 0.5 | (`post`/`both`) 답의 P(accept)가 이 값보다 작으면 escalate |
 | `route_pre_threshold` | 0.5 | (`pre`/`both`) 과제만 본 P(저비용 모델 성공)가 이 값보다 작으면 strong 모델로 바로 보냄 |

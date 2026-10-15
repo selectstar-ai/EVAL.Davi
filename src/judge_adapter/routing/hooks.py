@@ -10,6 +10,10 @@ Three hooks, all default-off, fail-open (any error leaves Claude Code's behaviou
                       directly; A does not verify. Nothing runs twice, but the judge never sees an answer.
 - ``both``            E routes up front as in ``pre``; a task sent to the cheap model is then verified by A as in
                       ``post``. A task already sent to the strong model is not verified again.
+- ``tiers``           E rates the task's difficulty for a small model (kind ``tier``, level in [0, 1]) and picks one
+                      of three models: below ``route_tier_low`` the cheap model, from ``route_tier_high`` the strong
+                      model, the mid model (``route_mid_model``) in between. With ``route_tier_check`` A verifies
+                      what went to the cheap model as in ``post``; otherwise nothing is verified.
 
 A  ``post``  PostToolUse on the Agent tool. The verifier reads the subagent's task (``tool_input.prompt``) and result
              (``tool_response``) and returns P(accept). Below the threshold the hook (1) tells the main agent to re-run
@@ -49,7 +53,7 @@ PENDING_TTL_SECONDS = 1800
 TRUE_WORDS, FALSE_WORDS = ('1', 'true', 'yes', 'on'), ('0', 'false', 'no', 'off')
 PIN_MODES = ('always', 'if_unset', 'off')
 POST_MODES = ('context', 'block')
-ROUTE_MODES = ('post', 'pre', 'both')
+ROUTE_MODES = ('post', 'pre', 'both', 'tiers')
 
 
 class ConfigError(ValueError):
@@ -97,6 +101,10 @@ class Settings:
     route_pre_threshold: float = 0.5
     route_cheap_model: str = 'haiku'
     route_strong_model: str = 'opus'
+    route_mid_model: str = 'sonnet'
+    route_tier_low: float = 0.48            # KLEAR-fitted (haiku 5.5 / sonnet 5.5 / opus 5.5); recalibrate per workload
+    route_tier_high: float = 0.78
+    route_tier_check: bool = False
     route_pin_cheap: str = 'always'
     route_post_mode: str = 'context'
     route_agent_types: tuple = ()           # empty = every subagent type
@@ -113,6 +121,10 @@ class Settings:
     probe_pre_model: str = ''
     probe_stop: bool = True                 # probe mode only: False skips the Stop probe (agent / pre probe runs)
     extra: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.route_tier_low > self.route_tier_high:
+            raise ConfigError('route_tier_low must not be above route_tier_high')
 
     @property
     def policy(self):
@@ -134,6 +146,10 @@ def load_settings(env):
         route_pre_threshold=_num(env, 'route_pre_threshold', 0.5, 0.0, 1.0),
         route_cheap_model=V.opt(env, 'route_cheap_model', 'haiku'),
         route_strong_model=V.opt(env, 'route_strong_model', 'opus'),
+        route_mid_model=V.opt(env, 'route_mid_model', 'sonnet'),
+        route_tier_low=_num(env, 'route_tier_low', 0.48, 0.0, 1.0),
+        route_tier_high=_num(env, 'route_tier_high', 0.78, 0.0, 1.0),
+        route_tier_check=_flag(env, 'route_tier_check', False),
         route_pin_cheap=_choice(env, 'route_pin_cheap', 'always', PIN_MODES),
         route_post_mode=_choice(env, 'route_post_mode', 'context', POST_MODES),
         route_agent_types=types,
@@ -328,6 +344,12 @@ def process_post(payload, s, verifier, state):
         return {'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': ctx}}, rec
     if s.route_mode == 'pre':
         return None, {**rec, 'status': 'mode_pre'}
+    if s.route_mode == 'tiers':
+        ran = [m for m in (model_in, rec['resolved_model']) if m]
+        if not s.route_tier_check:
+            return None, {**rec, 'status': 'mode_tiers'}
+        if ran and not any(same_model(m, s.route_cheap_model) for m in ran):
+            return None, {**rec, 'status': 'mode_tiers', 'reason': 'not_cheap'}      # mid / strong: not re-checked
     if s.route_agent_types and tin.get('subagent_type') not in s.route_agent_types:
         return None, {**rec, 'status': 'type_skipped'}
     if any(same_model(m, s.route_strong_model) for m in (model_in, rec['resolved_model']) if m):
@@ -373,6 +395,21 @@ def process_pre(payload, s, state, verifier=None):
         task = tin.get('prompt') or tin.get('description') or ''
         if pending:
             target, source = pending['model'], 'escalation'
+        elif s.route_mode == 'tiers' and verifier is not None and task.strip():
+            v = verifier.verify(task, kind='tier')
+            lvl = v.level
+            if lvl is None:                      # judge failure: fail-open to the cheap model unless on_error escalates
+                tier = 'strong' if s.on_error == 'escalate' else 'cheap'
+            else:
+                tier = 'cheap' if lvl < s.route_tier_low else ('strong' if lvl >= s.route_tier_high else 'mid')
+            target = {'cheap': s.route_cheap_model, 'mid': s.route_mid_model, 'strong': s.route_strong_model}[tier]
+            source = 'tier_route'
+            rec.update(judge=v.judge, level=lvl, tier=tier, outcome=v.outcome, latency_s=round(v.latency_s, 4),
+                       cost_usd=v.cost_usd, judge_model=v.model, task_sha=_h(task, 12),
+                       tier_low=s.route_tier_low, tier_high=s.route_tier_high,
+                       status='ok' if v.outcome == 'ok' else 'verifier_failed')
+            if v.outcome != 'ok':
+                rec['detail'] = v.detail
         elif s.route_mode in ('pre', 'both') and verifier is not None and task.strip():
             v = verifier.verify(task, kind='pre')
             route = s.pre_policy.decide(v.p_accept)
@@ -509,7 +546,7 @@ def main(kind, stdin=None, stdout=None, stderr=None, env=None, transport=None, v
     def run():
         judge = s.route_judge if kind in ('pre', 'post') else (s.stop_judge or s.route_judge)
         needs = not s.probe and not (kind == 'pre' and s.route_mode == 'post') \
-            and not (kind == 'post' and s.route_mode == 'pre')
+            and not (kind == 'post' and (s.route_mode == 'pre' or (s.route_mode == 'tiers' and not s.route_tier_check)))
         ver = verifier
         if ver is None and needs:
             ver = V.build_verifier(judge, env, transport=transport)

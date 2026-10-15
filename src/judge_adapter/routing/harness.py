@@ -351,6 +351,12 @@ def judged_name(judge, kind):
     return judge if kind == 'answer' else f'{judge}:{kind}'
 
 
+def is_graded(judge_name):
+    """3-tier difficulty results (``<judge>:tier``): not a binary accept/escalate route, so the two-model replays in
+    ``analyze`` and ``demo`` leave them out."""
+    return judge_name.endswith(':tier')
+
+
 def is_pre(judge_name):
     """Pre-routing results: an escalated task goes to the strong model directly (no cheap run is paid for)."""
     return judge_name.endswith(PRE_SUFFIX)
@@ -521,7 +527,7 @@ def analyze(cache, cheap, strong, calib_frac=0.3, seed=0, tolerance=0.02, on_err
     report['baselines'] = _baselines(rows_all)
     calib_ids, test_ids = split_ids(sorted(base), calib_frac, seed)
     curve_rows = []
-    for judge_name in sorted({j for (_, a, j) in js if a == cheap}):
+    for judge_name in sorted({j for (_, a, j) in js if a == cheap and not is_graded(j)}):
         rows = []
         for tid, b in base.items():
             j = js.get((tid, cheap, judge_name))
@@ -676,7 +682,7 @@ def demo_rows(cache, cheap, strong, threshold=0.5, on_error='accept', task_ids=N
     A judge's missing judgment shows as None (that task is still listed)."""
     runs = latest(read_jsonl(os.path.join(cache, RUNS)), lambda r: (r['task_id'], r['arm']))
     js = latest(read_jsonl(os.path.join(cache, JUDGMENTS)), lambda r: (r['task_id'], r['arm'], r['judge']))
-    judges = sorted({j for (_, a, j) in js if a == cheap})
+    judges = sorted({j for (_, a, j) in js if a == cheap and not is_graded(j)})
     want = None if task_ids is None else list(task_ids)
     ids = want if want is not None else sorted({t for (t, a) in runs if a == cheap})
     rows = []
