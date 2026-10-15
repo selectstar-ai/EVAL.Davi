@@ -25,6 +25,22 @@
   `<judge>:pre`(예: `davi:pre`)로 저장됩니다. 사전 라우팅에서 강한 모델로 보낸 과제는 저비용 실행 비용을 내지
   않으므로 `analyze`/`demo`의 비용도 판정 + 강한 모델만으로 계산합니다.
 
+  `pre` 문구는 "작고 빠른 모델이 도구 없이 기억만으로 답하면 맞을까?"입니다. KLEAR 174문항(haiku 5.5 정답 여부)에서
+  처음 문구("저비용 모델이 잘 풀까?", Davi AUROC 0.661)보다 이 형태가 haiku가 맞힐 문항과 틀릴 문항을 더 잘
+  갈랐습니다. `DAVI_BASE_URL`의 Davi는 같은 질문을 여덟 가지로 바꿔 한 번의 호출로 묻고 logit 평균을 P로 씁니다
+  (`PRE_ENSEMBLE`, 가중치 학습 없음, `davi_pre_ensemble=false`로 끔). 결과(2026-10-15, 1회 실행):
+
+  | | AUROC | 예산 50% 정답률 | haiku로 보낸 것 중 정답 | 판정 지연 |
+  |---|---|---|---|---|
+  | Davi, 처음 문구 | 0.661 | 60.3% | 60.3% | 0.3초 |
+  | Davi, 기억 문구 8개 평균 | 0.726 | 62.1% | 64.6% | 0.7초 |
+  | Claude Haiku 5.5, 처음 문구 | 0.763 | 62.6% | 65.1% | 3.2초 |
+  | Claude Haiku 5.5, 기억 문구 | 0.788 | 63.8% | 67.3% | 3.9초 |
+  | (참고) Davi, 답을 보고 판정(`post`) | 0.825 | 65.5% | - | 0.4초 |
+
+  문구는 같은 데이터에서 두 번 골랐으므로 수치는 약간 낙관적일 수 있습니다. 반으로 나눠 한쪽에서 고르고 다른
+  쪽에서 잰 값은 0.71~0.72였습니다. 여러 질문을 로지스틱으로 합치는 것(교차검증 0.706)은 평균보다 낫지 않았습니다.
+
 | judge | 호출 | P의 출처 | 비용 추정 |
 |---|---|---|---|
 | `davi` | `DAVI_BASE_URL`이 있으면 그 주소의 `POST /v1/systemone` (Jev와 같은 형식, 키는 선택 `DAVI_API_KEY`), 없으면 RunPod choice endpoint (기존 `ChoiceEndpointBackend`) | `answers.route.probabilities.accept` / 반환된 확률 | systemone: `davi_usd_in_per_mtok`를 넣기 전까지 알 수 없음(None) / RunPod: executionTime × `usd_per_second` |

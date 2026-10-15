@@ -154,6 +154,30 @@ def test_davi_through_a_systemone_base_url_needs_no_key_and_has_unknown_cost():
     v2 = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test:20100', 'DAVI_ROUTE_DAVI_USD_IN_PER_MTOK': '0.02'},
                           transport=httpx.MockTransport(handler))
     assert v2.verify('q', 'a').cost_usd == pytest.approx(500 * 0.02 / 1e6)
+    quoted = V.build_verifier('davi', {'DAVI_BASE_URL': '"http://davi.test:20100"'}, transport=httpx.MockTransport(handler))
+    assert quoted.verify('q', 'a').outcome == 'ok' and str(seen[-1].url) == 'http://davi.test:20100/v1/systemone'
+
+
+def test_davi_pre_ensemble_asks_every_phrasing_in_one_call_and_averages_logits():
+    seen = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        seen.append(body)
+        answers = {}
+        for k, q in body['questions'].items():
+            yes = next(v[2] for n, v in V.PRE_ENSEMBLE.items() if k == f'{V.QUESTION_ID}_{n}')
+            other = next(o for o in q['criteria'] if o != yes)
+            answers[k] = {'type': 'choice', 'probabilities': {yes: 0.8, other: 0.2}}
+        return httpx.Response(200, json={'answers': answers, 'usage': {'input_tokens': 900, 'output_tokens': 0}})
+    v = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test'}, transport=httpx.MockTransport(handler))
+    r = v.verify('Who wrote Hamlet?', kind='pre')
+    assert r.outcome == 'ok' and r.p_accept == pytest.approx(0.8)
+    assert len(seen) == 1 and len(seen[0]['questions']) == len(V.PRE_ENSEMBLE) and 'candidate' not in seen[0]['state']
+    off = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test', 'DAVI_ROUTE_DAVI_PRE_ENSEMBLE': 'false'},
+                           transport=httpx.MockTransport(lambda req: httpx.Response(200, json={'answers': {
+                               'route': {'probabilities': {'accept': 0.3, 'escalate': 0.7}}}})))
+    assert off.verify('Who wrote Hamlet?', kind='pre').p_accept == pytest.approx(0.3)
 
 
 def test_davi_verifier_through_the_existing_choice_backend():

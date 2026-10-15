@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -60,19 +61,56 @@ KINDS = {
         'accept': 'Complete: the requested task is done; the agent can stop.',
         'escalate': 'Not complete: something requested is missing or unverified; the agent should continue.',
     },
+    # "will a small model answering from memory get it right?" separated haiku-right from haiku-wrong tasks better
+    # than asking about the task's difficulty directly (KLEAR, 2026-10-15; docs/routing.md)
     'pre': {
         'instructions': (
-            'A lower-cost AI model is about to work on the task in the field "task"; it has not answered yet. Decide, '
-            'from the task alone, whether the lower-cost model is likely to answer it correctly and completely. If the '
-            'field "rubric" is present, apply it. Choose "accept" when the lower-cost model is likely to succeed. '
-            'Choose "escalate" when the task likely needs a stronger model (hard multi-step reasoning, rare or '
-            'specialised knowledge, long or exacting work), so that it goes to the stronger model directly.'),
-        'accept': 'Lower-cost model: it is likely to answer correctly; send the task to it.',
-        'escalate': 'Stronger model: the task likely needs it; send the task to the stronger model directly.',
+            'A small, fast AI model will answer the task in the field "task" from memory, with no tools or search, '
+            'before any stronger model sees it. Will its final answer be correct? If the field "rubric" is present, '
+            'apply it. Choose "accept" if it will be correct, so the task goes to the small model. Choose "escalate" '
+            'if it will likely be wrong, so the task goes to the stronger model directly.'),
+        'accept': 'Yes: a small model answering from memory will get it right; send the task to it.',
+        'escalate': 'No: a small model will likely get it wrong; send the task to the stronger model directly.',
     },
 }
 # kinds judged from the task alone (no candidate answer)
 TASK_ONLY_KINDS = ('pre',)
+
+# Several phrasings of the same pre question, asked in ONE /v1/systemone call; P(accept) is the mean of their
+# logits (an ensemble; no weights fitted). name -> (instructions, {option: description}, option meaning "accept").
+PRE_ENSEMBLE = {
+    'memory': ('A small, fast AI model will answer the question in "task" from memory, with no tools or search. Will '
+               'its final answer be correct?',
+               {'yes': 'Yes: a small model answering from memory will get it right.',
+                'no': 'No: a small model answering from memory will likely get it wrong.'}, 'yes'),
+    'memory_ko': ('작고 빠른 AI 모델이 도구나 검색 없이 기억만으로 "task"의 질문에 답합니다. 최종 답이 맞을까요?',
+                  {'yes': '예: 기억만으로 답해도 맞힐 것이다.', 'no': '아니오: 기억만으로는 틀릴 가능성이 높다.'}, 'yes'),
+    'closed_book': ('Treat "task" as a closed-book quiz question. Would a typical small language model give exactly the '
+                    'right final answer?',
+                    {'yes': 'Yes: it would get the exact final answer.', 'no': 'No: it would miss the exact answer.'},
+                    'yes'),
+    'confidence': ('How confident can we be that a small AI model, answering "task" immediately without tools, gives '
+                   'the correct final answer?',
+                   {'high': 'High confidence: it will be correct.', 'low': 'Low confidence: it may well be wrong.'},
+                   'high'),
+    'easy': ('Is the question in "task" easy enough that a small AI model answering from memory would get the exact '
+             'answer?', {'yes': 'Yes: easy enough for a small model.', 'no': 'No: too hard for a small model.'}, 'yes'),
+    'named': ('Claude Haiku, a small and fast model, will answer the question in "task" with no tools or search. Will '
+              'its final answer be correct?',
+              {'yes': 'Yes: Haiku will get it right.', 'no': 'No: Haiku will likely get it wrong.'}, 'yes'),
+    'most_wrong': ('Would most small AI models answer the question in "task" incorrectly?',
+                   {'no': 'No: most small models would answer it correctly.',
+                    'yes': 'Yes: most small models would get it wrong.'}, 'no'),
+    'popular': ('Is the answer to the question in "task" widely documented and frequently repeated, so that it is '
+                'likely memorised by language models?',
+                {'yes': 'Yes: widely documented and likely memorised.', 'no': 'No: obscure or rarely written down.'},
+                'yes'),
+}
+
+
+def _logit(p):
+    p = min(max(float(p), 1e-6), 1 - 1e-6)
+    return math.log(p / (1 - p))
 
 DEFAULT_MAX_CHARS = 24_000
 JEV_DEFAULT_MODEL = 'jev-latest'
@@ -251,9 +289,10 @@ class JevVerifier(_HttpJudge):
     name = 'jev'
 
     def __init__(self, key_provider, model=JEV_DEFAULT_MODEL, base_url=JEV_BASE_URL, usd_in_per_mtok=None,
-                 usd_out_per_mtok=None, **kw):
+                 usd_out_per_mtok=None, pre_ensemble=False, **kw):
         super().__init__(key_provider, base_url, **kw)
         self.model = model
+        self.pre_ensemble = pre_ensemble        # kind 'pre': ask every PRE_ENSEMBLE phrasing in the same call
         self.p_in = JEV_PRICE_IN_PER_MTOK if usd_in_per_mtok is None else usd_in_per_mtok
         self.p_out = JEV_PRICE_OUT_PER_MTOK if usd_out_per_mtok is None else usd_out_per_mtok
 
@@ -263,11 +302,30 @@ class JevVerifier(_HttpJudge):
             h['Authorization'] = f'Bearer {key}'
         return h
 
+    def _ensemble(self, kind):
+        return kind == 'pre' and self.pre_ensemble
+
     def body(self, task, candidate, rubric, kind):
+        st = state_of(task, candidate, rubric, self.max_chars)
+        if self._ensemble(kind):
+            qs = {f'{QUESTION_ID}_{n}': {'type': 'choice', 'instructions': ins, 'criteria': crit}
+                  for n, (ins, crit, _) in PRE_ENSEMBLE.items()}
+            return {'state': st, 'model': self.model, 'questions': qs}
         k = KINDS[kind]
-        return {'state': state_of(task, candidate, rubric, self.max_chars), 'model': self.model,
+        return {'state': st, 'model': self.model,
                 'questions': {QUESTION_ID: {'type': 'choice', 'instructions': k['instructions'],
                                             'criteria': {'accept': k['accept'], 'escalate': k['escalate']}}}}
+
+    def _ensemble_p(self, answers):
+        """Mean logit of the cheap-side probability over every phrasing; None if any is missing."""
+        logits = []
+        for n, (_, _, yes) in PRE_ENSEMBLE.items():
+            a = answers.get(f'{QUESTION_ID}_{n}')
+            p = (a.get('probabilities') or {}).get(yes) if isinstance(a, dict) else None
+            if not isinstance(p, (int, float)) or isinstance(p, bool):
+                return None
+            logits.append(_logit(p))
+        return 1 / (1 + math.exp(-sum(logits) / len(logits)))
 
     def _verify(self, task, candidate, rubric, kind, t0):
         status, js, text = self._post('/v1/systemone', self.body(task, candidate, rubric, kind))
@@ -276,6 +334,12 @@ class JevVerifier(_HttpJudge):
             return Verdict(self.name, kind, None, 'http', lat, None, detail=f'HTTP {status}: {text[:200]}')
         usage = js.get('usage') if isinstance(js.get('usage'), dict) else None
         cost = self._price(usage, self.p_in, self.p_out)
+        if self._ensemble(kind):
+            p = self._ensemble_p(js.get('answers') or {})
+            if p is None:
+                return Verdict(self.name, kind, None, 'format_error', lat, cost, js.get('model'), usage,
+                               'a pre-ensemble answer is missing its probabilities')
+            return Verdict(self.name, kind, p, 'ok', lat, cost, js.get('model'), usage)
         ans = (js.get('answers') or {}).get(QUESTION_ID)
         probs = ans.get('probabilities') if isinstance(ans, dict) else None
         p = probs.get('accept') if isinstance(probs, dict) else None
@@ -449,17 +513,20 @@ def build_verifier(name, env, transport=None, clock=time.perf_counter, sleep=tim
                               timeout=timeout, max_chars=max_chars, clock=clock)
     # davi served behind the same POST /v1/systemone shape as Jev (DAVI_BASE_URL): same body, P from probabilities.
     # Cost is unknown unless per-MTok prices are configured (self-hosted: no list price).
-    davi_url = opt(env, 'davi_base_url') or (env.get('DAVI_BASE_URL') or '').strip()
+    davi_url = (opt(env, 'davi_base_url') or (env.get('DAVI_BASE_URL') or '')).strip()
+    if len(davi_url) >= 2 and davi_url[0] == davi_url[-1] and davi_url[0] in '"\'':
+        davi_url = davi_url[1:-1].strip()          # a value pasted from a .env line with its quotes
     if davi_url:
         def davi_key():
             for n in SECRET_ENVS['davi_systemone']:
                 if (env.get(n) or '').strip():
                     return env[n].strip()
             return None
+        ens = (opt(env, 'davi_pre_ensemble', 'true') or 'true').lower() not in ('0', 'false', 'no', 'off')
         v = JevVerifier(davi_key, model=opt(env, 'davi_model', 'davi'), base_url=davi_url,
                         usd_in_per_mtok=_fnum(env, 'davi_usd_in_per_mtok'),
-                        usd_out_per_mtok=_fnum(env, 'davi_usd_out_per_mtok'), transport=transport, timeout=timeout,
-                        max_chars=max_chars, clock=clock)
+                        usd_out_per_mtok=_fnum(env, 'davi_usd_out_per_mtok'), pre_ensemble=ens, transport=transport,
+                        timeout=timeout, max_chars=max_chars, clock=clock)
         v.name = 'davi'
         if _fnum(env, 'davi_usd_in_per_mtok') is None:
             v.p_in = v.p_out = None                     # never the Jev defaults: cost reported as unknown

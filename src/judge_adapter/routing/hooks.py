@@ -343,6 +343,8 @@ def process_post(payload, s, verifier, state):
                outcome=v.outcome, decision=route.decision, reason=route.reason, next_model=route.next_model,
                threshold=s.route_threshold, latency_s=round(v.latency_s, 4), cost_usd=v.cost_usd,
                judge_model=v.model)
+    if v.outcome != 'ok':
+        rec['detail'] = v.detail          # the verifier's reason, keys already scrubbed
     if route.decision != 'escalate':
         return None, rec
     state.set_pending(payload.get('session_id', ''), route.next_model, route.reason)
@@ -379,6 +381,8 @@ def process_pre(payload, s, state, verifier=None):
                        reason=route.reason, threshold=s.route_pre_threshold, latency_s=round(v.latency_s, 4),
                        cost_usd=v.cost_usd, judge_model=v.model, task_sha=_h(task, 12),
                        status='ok' if v.outcome == 'ok' else 'verifier_failed')
+            if v.outcome != 'ok':
+                rec['detail'] = v.detail
         elif s.route_pin_cheap == 'always' or (s.route_pin_cheap == 'if_unset' and not requested):
             target, source = s.route_cheap_model, 'pin_cheap'
         else:
@@ -434,6 +438,8 @@ def process_stop(payload, s, verifier, state):
     else:
         decision = 'block' if v.p_accept < s.stop_threshold else 'allow'
     rec.update(status='ok' if v.outcome == 'ok' else 'verifier_failed', decision=decision)
+    if v.outcome != 'ok':
+        rec['detail'] = v.detail
     if decision != 'block':
         return None, rec
     block()
