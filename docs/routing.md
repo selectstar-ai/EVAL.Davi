@@ -23,13 +23,16 @@
 
 | judge | 호출 | P의 출처 | 비용 추정 |
 |---|---|---|---|
-| `davi` | RunPod choice endpoint (기존 `ChoiceEndpointBackend`) | 반환된 확률 | executionTime × `usd_per_second` |
+| `davi` | `DAVI_BASE_URL`이 있으면 그 주소의 `POST /v1/systemone` (Jev와 같은 형식, 키는 선택 `DAVI_API_KEY`), 없으면 RunPod choice endpoint (기존 `ChoiceEndpointBackend`) | `answers.route.probabilities.accept` / 반환된 확률 | systemone: `davi_usd_in_per_mtok`를 넣기 전까지 알 수 없음(None) / RunPod: executionTime × `usd_per_second` |
 | `jev` | `POST https://api.typesafe.ai/v1/systemone`, Bearer | `answers.route.probabilities.accept` | usage × 단가 (**기본값 $0.042/MTok 입력은 가정**, 설정 권장) |
-| `claude` | Anthropic Messages | **말로 답한 0~100 숫자** (API가 logprob을 주지 않음) | usage × 단가 (기본 Haiku 4.5 $1/$5) |
+| `claude` | Anthropic Messages | **말로 답한 0~100 숫자** (API가 logprob을 주지 않음) | usage × 단가 (기본 Haiku 5.5 $0.10/$0.50, effort low) |
 | `fake` | 프로세스 내 | `[[ACCEPT=p]]` 표식, 없으면 `fake_default` | 0 |
 
 `claude` 판정자는 확률이 말로 나오기 때문에 다른 둘보다 거칠고 보정이 덜 됩니다. 비교할 때 이 차이를 함께 적어야
-합니다.
+합니다. 모델은 `claude_judge_model`(기본 `claude-haiku-5-5`), 생각 깊이는 `claude_judge_effort`(기본 `low`)로
+바꿉니다. 5세대 모델은 `temperature`를 받지 않으므로 effort로 보내고, 답의 **마지막** 숫자를 확률로 읽습니다(앞에
+짧은 풀이를 쓰는 경우가 있음). Haiku 4.5는 맞는 답과 틀린 답 모두에 약 2%를 답해 판정자로 쓰지 않습니다
+(2026-10-15 확인). `llm` grader는 기본 `claude-sonnet-5-5`(`grader_model`로 변경)입니다.
 
 단일 호출 확인:
 
@@ -135,6 +138,27 @@ davi-route analyze --cache runs/x --cheap cheap --strong strong --calib-frac 0.3
 
 오프라인 replay에서 escalate된 과제의 비용은 cheap 실행 + 판정 + 새 strong 실행입니다. 실시간 루프에서
 `--model <next_model>`로 다시 돌리는 것과 같은 비용이며, 임계값마다 다시 돌릴 필요가 없습니다.
+
+채점: regex / contains / exact / number는 마크다운 강조(`**B**`)를 지운 뒤 비교하고, number는 한국어 단위 금액
+(`21억 3,000만`)도 읽습니다. grader를 고쳤거나 llm grader 키를 나중에 넣었으면 `davi-route regrade --tasks T.jsonl
+--cache runs/x`로 캐시된 답을 다시 채점합니다.
+
+## 시연용 (고정 임계값, 선별)
+
+```bash
+# 판정자 결과에서 "우리 판정자는 맞는 경로, 다른 판정자는 틀린 경로"인 과제를 고름 → 과제 JSONL + 선별 기준 JSON
+davi-route curate --tasks T.jsonl --cache runs/x --ours davi --n 20 --accept-frac 0.5 --threshold 0.5 \
+    --out runs/x/demo.tasks.jsonl
+# 과제별로 판정자마다 P(accept) → 경로 → 최종 정답 여부 → 비용, 마지막에 정확도 / 고성능 호출 비율 / 총비용 요약
+davi-route demo --cache runs/x --tasks runs/x/demo.tasks.jsonl --threshold 0.5
+```
+
+- 맞는 경로는 사후 기준입니다: cheap이 맞았으면 accept, cheap이 틀리고 strong이 맞았으면 escalate. 둘 다 틀린 과제는
+  어느 경로든 결과가 같아 선별에서 뺍니다.
+- `--require all`(기본)은 다른 판정자가 **모두** 틀린 과제만, `any`는 하나라도 틀린 과제를 고릅니다. `--min-margin`은
+  우리 판정자의 P가 임계값에서 그만큼 떨어진 과제만 남깁니다(재실행 시 뒤집힐 가능성을 줄임).
+- `curate`는 **결과를 보고 고른 것**입니다. 그 숫자는 선별된 과제에 대한 것이지 일반 성능 추정이 아니므로, 시연에서는
+  "선별 사례"로 표시하세요. 선별 기준은 `*.selection.json`에 남습니다.
 
 ## 비용 회계와 한계
 

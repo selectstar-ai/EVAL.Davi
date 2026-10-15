@@ -6,6 +6,9 @@
   davi-route judge    --tasks T.jsonl --cache runs/x --source-arm cheap --judge davi --judge jev --judge claude
   davi-route analyze  --cache runs/x --cheap cheap --strong strong --out runs/x/report
   davi-route verify   --judge jev --task "..." --candidate "..."
+  davi-route regrade  --tasks T.jsonl --cache runs/x
+  davi-route curate   --tasks T.jsonl --cache runs/x --ours davi --n 20 --out runs/x/demo.tasks.jsonl
+  davi-route demo     --cache runs/x [--tasks runs/x/demo.tasks.jsonl] --threshold 0.5
   davi-route hooklog  path/to/hooks.jsonl
   davi-route probe    --plugin-dir plugins/davi-route --out runs/probe
 
@@ -78,6 +81,36 @@ def cmd_verify(a):
     return 0 if r.outcome == 'ok' else 1
 
 
+def cmd_regrade(a):
+    Hn.regrade(Hn.load_tasks(a.tasks), a.cache)
+    return 0
+
+
+def cmd_curate(a):
+    sel = Hn.curate(a.cache, a.cheap, a.strong, ours=a.ours, n=a.n, accept_frac=a.accept_frac,
+                    threshold=a.threshold, min_margin=a.min_margin, require=a.require, on_error=a.on_error)
+    keep = set(sel['selected'])
+    tasks = [t for t in Hn.read_jsonl(a.tasks) if t.get('id') in keep]
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)) or '.', exist_ok=True)
+    with open(a.out, 'w', encoding='utf-8') as f:
+        for t in tasks:
+            f.write(json.dumps(t, ensure_ascii=False) + '\n')
+    with open(os.path.splitext(a.out)[0] + '.selection.json', 'w', encoding='utf-8') as f:
+        json.dump(sel, f, ensure_ascii=False, indent=2)
+    print(f'selected {len(tasks)} tasks (accept {sel["picked"]["accept"]}, escalate {sel["picked"]["escalate"]}; '
+          f'available {sel["available"]}) -> {a.out}')
+    rows, judges = Hn.demo_rows(a.cache, a.cheap, a.strong, a.threshold, a.on_error, task_ids=sel['selected'])
+    print(Hn.demo_text(rows, judges, a.threshold))
+    return 0
+
+
+def cmd_demo(a):
+    ids = [t['id'] for t in Hn.read_jsonl(a.tasks)] if a.tasks else None
+    rows, judges = Hn.demo_rows(a.cache, a.cheap, a.strong, a.threshold, a.on_error, task_ids=ids)
+    print(Hn.demo_text(rows, judges, a.threshold))
+    return 0
+
+
 def cmd_hooklog(a):
     print(json.dumps(Hn.hooklog_summary(a.path), ensure_ascii=False, indent=2))
     return 0
@@ -138,6 +171,34 @@ def build_parser():
     v.add_argument('--rubric')
     v.add_argument('--kind', default='answer', choices=sorted(V.KINDS))
     v.set_defaults(fn=cmd_verify)
+
+    rg = sub.add_parser('regrade', help='re-apply the task graders to cached runs')
+    rg.add_argument('--tasks', required=True)
+    rg.add_argument('--cache', required=True)
+    rg.set_defaults(fn=cmd_regrade)
+
+    def _demo_args(x):
+        x.add_argument('--cache', required=True)
+        x.add_argument('--cheap', default='cheap')
+        x.add_argument('--strong', default='strong')
+        x.add_argument('--threshold', type=float, default=0.5)
+        x.add_argument('--on-error', default='accept', choices=('accept', 'escalate'))
+
+    c = sub.add_parser('curate', help='pick a DEMO subset where one judge routes right and the others do not')
+    _demo_args(c)
+    c.add_argument('--tasks', required=True)
+    c.add_argument('--out', required=True, help='tasks JSONL of the selection (+ .selection.json with the criteria)')
+    c.add_argument('--ours', default='davi')
+    c.add_argument('--n', type=int, default=20)
+    c.add_argument('--accept-frac', type=float, default=0.5)
+    c.add_argument('--min-margin', type=float, default=0.0, help='|P(ours) - threshold| at least this')
+    c.add_argument('--require', default='all', choices=('all', 'any'), help='rivals that must route wrong')
+    c.set_defaults(fn=cmd_curate)
+
+    d = sub.add_parser('demo', help='per task: P -> route -> correct -> cost for each judge, then a summary')
+    _demo_args(d)
+    d.add_argument('--tasks', help='limit to (and order by) the tasks in this JSONL')
+    d.set_defaults(fn=cmd_demo)
 
     h = sub.add_parser('hooklog', help='summarize a davi-route hook log (A/B inside Claude Code)')
     h.add_argument('path')

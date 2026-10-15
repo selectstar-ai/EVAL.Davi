@@ -13,6 +13,14 @@ Pipeline (each step caches to JSONL in one directory and skips what is already t
                  correct", and a FROZEN threshold chosen on a calibration split and reported on the held-out split.
                  Also a per-arm summary (accuracy, cost per task, cost per success) for end-to-end arms such as A/B.
 
+Demo helpers (fixed threshold, no calibration split; for showing the flow, not for claims):
+
+- ``regrade``  re-apply the task graders to cached runs (after a grader fix, or once an LLM-grader key is set).
+- ``curate``   pick a DEMO subset where one judge ("ours") routes correctly and the others do not. This is a selection
+               on outcomes: its numbers describe the selected tasks only and must be presented as selected cases.
+- ``demo``     per task, each judge's P(accept) -> route -> final answer correct -> cost, then a summary (accuracy,
+               strong-model call rate, total cost incl. judge cost) next to always-cheap and always-strong.
+
 Escalation in the offline replay = cheap run + judge + a fresh strong run (the strong answer replaces the cheap one).
 That is exactly what the live loop does with ``--model <next_model>``, so the replay is the live loop's cost, without
 paying for it once per threshold.
@@ -175,7 +183,9 @@ def summarize_model_usage(mu):
 def run_claude(cmd, env, cwd=None, timeout=900):
     t0 = time.time()
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd, timeout=timeout)
+        # stdin closed: claude -p also reads piped stdin, and an inherited open pipe can block it until the timeout
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=cwd, timeout=timeout,
+                           stdin=subprocess.DEVNULL)
         code, out, err = p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired as e:
         code, out, err = 'timeout', e.stdout or '', e.stderr or ''
@@ -206,30 +216,59 @@ def _last_number(s):
     return float(nums[-1].replace(',', '')) if nums else None
 
 
+_MD_EMPH_RE = re.compile(r'\*\*|__|`')
+_KO_UNITS = {'조': 10 ** 12, '억': 10 ** 8, '만': 10 ** 4}
+_KO_AMOUNT_RE = re.compile(r'(?:\d[\d,]*(?:\.\d+)?\s*[조억만]\s*)+(?:\d[\d,]*(?:\.\d+)?)?')
+_KO_PART_RE = re.compile(r'(\d[\d,]*(?:\.\d+)?)\s*([조억만]?)')
+
+
+def _plain(s):
+    """The answer text without markdown emphasis (``**B**`` -> ``B``), so graders see what the model meant."""
+    return _MD_EMPH_RE.sub('', str(s))
+
+
+def _last_ko_amount(s):
+    """The last Korean-unit amount in ``s`` ('21억 3,000만' -> 2130000000.0), or None."""
+    found = _KO_AMOUNT_RE.findall(s or '')
+    if not found:
+        return None
+    total = 0.0
+    for num, unit in _KO_PART_RE.findall(found[-1]):
+        total += float(num.replace(',', '')) * _KO_UNITS.get(unit, 1)
+    return total
+
+
 LLM_GRADER_PROMPT = (
     'Decide whether the response gives the same final answer as the reference answer. Ignore formatting, explanation '
     'and wording; judge only the final answer. Reply with exactly "yes" or "no".\n\n<question>\n{q}\n</question>\n\n'
     '<reference>\n{a}\n</reference>\n\n<response>\n{r}\n</response>')
 
 
+GRADER_DEFAULT_MODEL = 'claude-sonnet-5-5'      # grading defines the labels: a stronger model than the judges
+_YES_NO_RE = re.compile(r'\b(yes|no)\b')
+
+
 def llm_grade(task, result, env, transport=None, model=None):
-    """Haiku-style grading against the reference (as in the earlier HLE runs). -> (bool | None, detail)."""
+    """LLM grading against the reference answer. -> (bool | None, detail)."""
     import httpx
     key = V.lazy_key(env, V.SECRET_ENVS['claude'])()
-    body = {'model': model or V.opt(env, 'grader_model', V.CLAUDE_DEFAULT_MODEL), 'max_tokens': 4, 'temperature': 0.0,
-            'messages': [{'role': 'user', 'content': LLM_GRADER_PROMPT.format(
-                q=V.clip(task.prompt, 8000), a=task.answer, r=V.clip(result, 16000))}]}
+    model = model or V.opt(env, 'grader_model', GRADER_DEFAULT_MODEL)
+    body = {'model': model, 'messages': [{'role': 'user', 'content': LLM_GRADER_PROMPT.format(
+        q=V.clip(task.prompt, 8000), a=task.answer, r=V.clip(result, 16000))}]}
+    if V.uses_effort(model):
+        body.update(max_tokens=2048, output_config={'effort': 'low'})
+    else:
+        body.update(max_tokens=4, temperature=0.0)
     tr = transport or httpx.HTTPTransport(retries=0)
-    with httpx.Client(transport=tr, timeout=60) as c:
+    with httpx.Client(transport=tr, timeout=120) as c:
         r = c.post(V.opt(env, 'claude_base_url', V.CLAUDE_BASE_URL) + '/v1/messages', json=body,
                    headers={'x-api-key': key, 'anthropic-version': V.ANTHROPIC_VERSION})
     if r.status_code != 200:
         return None, f'grader HTTP {r.status_code}'
     text = ''.join(b.get('text', '') for b in r.json().get('content') or []).strip().lower()
-    if text.startswith('yes'):
-        return True, 'llm:yes'
-    if text.startswith('no'):
-        return False, 'llm:no'
+    found = _YES_NO_RE.findall(text)          # the last yes/no: a reason may come first
+    if found:
+        return found[-1] == 'yes', f'llm:{found[-1]}'
     return None, f'llm:unparsed {text[:20]!r}'
 
 
@@ -249,17 +288,19 @@ def grade(task, result, env=None, transport=None):
             return None, 'cmd timeout'
     if task.answer is None:
         return None, 'no answer'
+    text = _plain(result)
     if g == 'exact':
-        return _norm(result) == _norm(task.answer), 'exact'
+        return _norm(text) == _norm(task.answer), 'exact'
     if g == 'contains':
-        return _norm(task.answer) in _norm(result), 'contains'
+        return _norm(task.answer) in _norm(text), 'contains'
     if g == 'regex':
-        return re.search(task.answer, str(result), re.I | re.S) is not None, 'regex'
+        return re.search(task.answer, text, re.I | re.S) is not None, 'regex'
     if g == 'number':
-        got, want = _last_number(str(result)), _last_number(str(task.answer))
-        if got is None or want is None:
+        want = _last_number(str(task.answer))
+        got = [x for x in (_last_number(text), _last_ko_amount(text)) if x is not None]
+        if not got or want is None:
             return False, 'number missing'
-        return abs(got - want) <= max(1e-9, 1e-6 * abs(want)), 'number'
+        return any(abs(x - want) <= max(1e-9, 1e-6 * abs(want)) for x in got), 'number'
     try:
         return llm_grade(task, str(result), env or os.environ, transport)
     except Exception as e:  # noqa: BLE001
@@ -572,6 +613,163 @@ def _write(report, curve_rows, out_dir):
         w.writeheader()
         for r in curve_rows:
             w.writerow({k: r.get(k) for k in cols})
+
+
+# --- demo helpers: regrade, curate, demo -------------------------------------------------------------------------------
+def regrade(tasks, cache, env=None, transport=None, log=print):
+    """Re-apply each task's grader to its cached runs; appends a record only when the grade changes."""
+    path = os.path.join(cache, RUNS)
+    by_id = {t.id: t for t in tasks}
+    changed = 0
+    for (tid, _arm), r in latest(read_jsonl(path), lambda r: (r['task_id'], r['arm'])).items():
+        t = by_id.get(tid)
+        if t is None or r.get('is_error'):
+            continue
+        ok, why = grade(t, r.get('result'), env=env, transport=transport)
+        if (ok, why) != (r.get('correct'), r.get('grade')):
+            append_jsonl(path, {**r, 'correct': ok, 'grade': why, 'regraded_from': r.get('correct'), 'ts': time.time()})
+            changed += 1
+    log(f'regrade: {changed} runs changed')
+    return changed
+
+
+def ideal_route(cheap_ok, strong_ok):
+    """The route that is right in hindsight: keep a correct cheap answer, escalate a wrong one the strong model fixes.
+    None when both are wrong (no route changes the outcome)."""
+    if cheap_ok:
+        return 'accept'
+    return 'escalate' if strong_ok else None
+
+
+def route_of(p, threshold, on_error='accept'):
+    return ('escalate' if on_error == 'escalate' else 'accept') if p is None else (
+        'escalate' if p < threshold else 'accept')
+
+
+def _last_line(text, width=60):
+    lines = [x.strip() for x in str(text or '').strip().splitlines() if x.strip()]
+    s = lines[-1] if lines else ''
+    return s if len(s) <= width else s[:width - 1] + '…'
+
+
+def demo_rows(cache, cheap, strong, threshold=0.5, on_error='accept', task_ids=None):
+    """One row per task that has graded cheap and strong runs: each judge's P -> route -> final correct -> cost.
+    A judge's missing judgment shows as None (that task is still listed)."""
+    runs = latest(read_jsonl(os.path.join(cache, RUNS)), lambda r: (r['task_id'], r['arm']))
+    js = latest(read_jsonl(os.path.join(cache, JUDGMENTS)), lambda r: (r['task_id'], r['arm'], r['judge']))
+    judges = sorted({j for (_, a, j) in js if a == cheap})
+    want = None if task_ids is None else list(task_ids)
+    ids = want if want is not None else sorted({t for (t, a) in runs if a == cheap})
+    rows = []
+    for tid in ids:
+        c, s = runs.get((tid, cheap)), runs.get((tid, strong))
+        if not c or not s or c.get('correct') is None or s.get('correct') is None:
+            continue
+        cc, sc = c.get('total_cost_usd') or 0.0, s.get('total_cost_usd') or 0.0
+        row = {'id': tid, 'cheap_ok': bool(c['correct']), 'strong_ok': bool(s['correct']), 'cheap_cost': cc,
+               'strong_cost': sc, 'cheap_answer': _last_line(c.get('result')),
+               'strong_answer': _last_line(s.get('result')), 'ideal': ideal_route(c['correct'], s['correct']),
+               'judges': {}}
+        for j in judges:
+            v = js.get((tid, cheap, j))
+            if v is None:
+                row['judges'][j] = None
+                continue
+            p = v.get('p_accept')
+            route = route_of(p, threshold, on_error)
+            esc = route == 'escalate'
+            jc = v.get('cost_usd')
+            row['judges'][j] = {'p': p, 'route': route, 'correct': row['strong_ok'] if esc else row['cheap_ok'],
+                                'judge_cost': jc, 'cost': cc + (jc or 0.0) + (sc if esc else 0.0),
+                                'right_route': row['ideal'] is None or route == row['ideal']}
+        rows.append(row)
+    return rows, judges
+
+
+def demo_summary(rows, judges):
+    n = len(rows)
+    if not n:
+        return {}
+    out = {'always_cheap': {'accuracy': sum(r['cheap_ok'] for r in rows) / n, 'strong_rate': 0.0,
+                            'total_cost': sum(r['cheap_cost'] for r in rows), 'judge_cost': 0.0, 'n': n},
+           'always_strong': {'accuracy': sum(r['strong_ok'] for r in rows) / n, 'strong_rate': 1.0,
+                             'total_cost': sum(r['strong_cost'] for r in rows), 'judge_cost': 0.0, 'n': n}}
+    for j in judges:
+        got = [r['judges'][j] for r in rows if r['judges'].get(j)]
+        if not got:
+            continue
+        m = len(got)
+        out[j] = {'accuracy': sum(g['correct'] for g in got) / m,
+                  'strong_rate': sum(g['route'] == 'escalate' for g in got) / m,
+                  'total_cost': sum(g['cost'] for g in got),
+                  'judge_cost': sum(g['judge_cost'] or 0.0 for g in got),
+                  'unknown_judge_cost': sum(g['judge_cost'] is None for g in got),
+                  'right_route': sum(g['right_route'] for g in got) / m, 'n': m}
+    return out
+
+
+def curate(cache, cheap, strong, ours='davi', n=20, accept_frac=0.5, threshold=0.5, min_margin=0.0,
+           require='all', on_error='accept'):
+    """Pick up to ``n`` tasks where ``ours`` takes the right route and the other judges do not (``require='all'``: every
+    other judge is wrong; ``'any'``: at least one). ``accept_frac`` of them are tasks whose right route is accept (the
+    cheap answer was correct), the rest escalate tasks; a short side is filled from the other. Within a side, tasks
+    where more rivals are wrong and ``ours`` is farther from the threshold come first. Both-wrong tasks are skipped."""
+    rows, judges = demo_rows(cache, cheap, strong, threshold, on_error)
+    if ours not in judges:
+        raise ValueError(f'no judgments by {ours!r} in {cache} (have {judges})')
+    rivals = [j for j in judges if j != ours]
+    pools = {'accept': [], 'escalate': []}
+    for r in rows:
+        mine = r['judges'].get(ours)
+        if r['ideal'] is None or not mine or not all(r['judges'].get(j) for j in rivals):
+            continue
+        if mine['route'] != r['ideal'] or mine['p'] is None or abs(mine['p'] - threshold) < min_margin:
+            continue
+        wrong = sum(r['judges'][j]['route'] != r['ideal'] for j in rivals)
+        if wrong < (len(rivals) if require == 'all' else 1) or (rivals and wrong == 0):
+            continue
+        pools[r['ideal']].append((-wrong, -abs(mine['p'] - threshold), r['id']))
+    for v in pools.values():
+        v.sort()
+    k_acc = min(len(pools['accept']), round(n * accept_frac))
+    k_esc = min(len(pools['escalate']), n - k_acc)
+    k_acc = min(len(pools['accept']), n - k_esc)
+    picked = [x[2] for x in pools['accept'][:k_acc]] + [x[2] for x in pools['escalate'][:k_esc]]
+    return {'selected': picked, 'ours': ours, 'rivals': rivals, 'threshold': threshold, 'require': require,
+            'min_margin': min_margin, 'available': {k: len(v) for k, v in pools.items()},
+            'picked': {'accept': k_acc, 'escalate': k_esc}, 'n_pool': len(rows),
+            'note': 'selected on outcomes for a demo; not an estimate of general performance'}
+
+
+def demo_text(rows, judges, threshold, width=36):
+    L = [f'threshold {threshold}: escalate when P(accept) < threshold. O = final answer correct, X = wrong.', '']
+    head = f'{"task":<{width}} {"haiku":<5} {"opus":<5} ' + ' '.join(f'{j:<22}' for j in judges)
+    L += [head, '-' * len(head)]
+    for r in rows:
+        cells = []
+        for j in judges:
+            g = r['judges'].get(j)
+            if not g:
+                cells.append(f'{"-":<22}')
+                continue
+            p = '  -  ' if g['p'] is None else f'{g["p"]:.2f}'
+            cells.append(f'{p} {g["route"]:<8} {"O" if g["correct"] else "X"} ${g["cost"]:.3f}'.ljust(22))
+        L.append(f'{r["id"][:width]:<{width}} {"O" if r["cheap_ok"] else "X":<5} {"O" if r["strong_ok"] else "X":<5} '
+                 + ' '.join(cells))
+    s = demo_summary(rows, judges)
+    if s:
+        L += ['', f'{"policy":<14} {"n":>3} {"accuracy":>9} {"strong calls":>13} {"total cost":>11} {"judge cost":>11} '
+              f'{"right route":>12}', '-' * 80]
+        for k, v in s.items():
+            rr = f'{100 * v["right_route"]:.0f}%' if 'right_route' in v else '-'
+            jc = f'${v["judge_cost"]:.4f}' + ('*' if v.get('unknown_judge_cost') else '')
+            L.append(f'{k:<14} {v["n"]:>3} {100 * v["accuracy"]:>8.0f}% {100 * v["strong_rate"]:>12.0f}% '
+                     f'${v["total_cost"]:>10.4f} {jc:>11} {rr:>12}')
+        if any(v.get('unknown_judge_cost') for v in s.values()):
+            L.append('* some judge costs unknown (counted as 0)')
+    L += ['', 'Costs: Claude Code total_cost_usd and judge estimates (list prices, not bills). Escalated = cheap + judge '
+          '+ strong.']
+    return '\n'.join(L) + '\n'
 
 
 # --- hook logs (A / B inside Claude Code) --------------------------------------------------------------------------

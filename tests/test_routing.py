@@ -92,7 +92,8 @@ def claude_transport(seen, reply='23'):
 
 def test_claude_verbalized_probability():
     seen = []
-    r = V.ClaudeVerifier(lambda: KEY, transport=claude_transport(seen, '23')).verify('t', 'c', kind='completion')
+    r = V.ClaudeVerifier(lambda: KEY, model='claude-haiku-4-5-20251001',
+                         transport=claude_transport(seen, '23')).verify('t', 'c', kind='completion')
     body = json.loads(seen[0].content)
     assert seen[0].headers['x-api-key'] == KEY and body['max_tokens'] == 8 and body['temperature'] == 0.0
     assert V.KINDS['completion']['instructions'] in body['messages'][0]['content']
@@ -117,6 +118,42 @@ def davi_transport(bodies):
                                              'type': 'choice', 'choice': 'opt_accept' if p > 0.5 else 'opt_escalate',
                                              'probabilities': {'opt_accept': p, 'opt_escalate': 1 - p}}}}})
     return httpx.MockTransport(handle)
+
+
+def test_claude_judge_on_5_generation_models_uses_effort_and_reads_the_last_number():
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json={'content': [{'type': 'thinking', 'thinking': ''},
+                                                     {'type': 'text', 'text': '17*23 = 391, correct.\n\n96'}],
+                                         'usage': {'input_tokens': 1000, 'output_tokens': 100}})
+    v = V.build_verifier('claude', {'ANTHROPIC_API_KEY': 'sk-test-0000000000',
+                                    'DAVI_ROUTE_CLAUDE_JUDGE_MODEL': 'claude-haiku-5-5'},
+                         transport=httpx.MockTransport(handler))
+    r = v.verify('What is 17*23?', '391')
+    assert r.p_accept == pytest.approx(0.96) and r.cost_usd == pytest.approx(1000 * 0.10 / 1e6 + 100 * 0.50 / 1e6)
+    assert 'temperature' not in seen[0] and seen[0]['output_config'] == {'effort': 'low'}
+    assert seen[0]['max_tokens'] >= 1024
+    assert V.uses_effort('claude-sonnet-5-5') and not V.uses_effort('claude-haiku-4-5-20251001')
+
+
+def test_davi_through_a_systemone_base_url_needs_no_key_and_has_unknown_cost():
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(200, json={'answers': {'route': {'probabilities': {'accept': 0.81, 'escalate': 0.19}}},
+                                         'usage': {'input_tokens': 500, 'output_tokens': 1}, 'model': 'davi-x'})
+    v = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test:20100'}, transport=httpx.MockTransport(handler))
+    r = v.verify('What is 17*23?', '391')
+    assert (r.judge, r.outcome, r.p_accept, r.cost_usd, r.model) == ('davi', 'ok', 0.81, None, 'davi-x')
+    assert str(seen[0].url) == 'http://davi.test:20100/v1/systemone' and 'authorization' not in seen[0].headers
+    body = json.loads(seen[0].content)
+    assert body['questions']['route']['type'] == 'choice' and set(body['questions']['route']['criteria']) == set(V.LABELS)
+    v2 = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test:20100', 'DAVI_ROUTE_DAVI_USD_IN_PER_MTOK': '0.02'},
+                          transport=httpx.MockTransport(handler))
+    assert v2.verify('q', 'a').cost_usd == pytest.approx(500 * 0.02 / 1e6)
 
 
 def test_davi_verifier_through_the_existing_choice_backend():
@@ -341,6 +378,17 @@ def test_graders():
     assert Hn.grade(Hn.Task('f', 'q', answer='x'), '   ')[0] is False
 
 
+def test_graders_ignore_markdown_emphasis_and_read_korean_amounts():
+    choice = Hn.Task('a', 'q', answer=r'정답\s*[:：]\s*\(?B\b', grader='regex')
+    assert Hn.grade(choice, '풀이...\n정답: **B**')[0] is True
+    assert Hn.grade(choice, '정답: **C**')[0] is False
+    money = Hn.Task('b', 'q', answer='2130000000', grader='number')
+    assert Hn.grade(money, '정답: 21억 3,000만 원')[0] is True
+    assert Hn.grade(money, '정답: 21억 원')[0] is False
+    assert Hn.grade(Hn.Task('c', 'q', answer='2', grader='number'), '정답: **3**')[0] is False
+    assert Hn._last_ko_amount('약 1.5만 명') == 15000.0 and Hn._last_ko_amount('만약 그렇다면') is None
+
+
 def test_claude_cmd_and_result_parsing():
     arm = Hn.parse_arm('plug=sonnet:--plugin-dir plugins/davi-route')
     cmd = Hn.claude_cmd(Hn.Task('a', 'hello'), arm, max_turns=3, budget_usd=0.5, session_id='u')
@@ -410,6 +458,52 @@ def test_sweep_endpoints_and_random_baseline():
     rnd = Hn._random_point(rows, 0.5)
     assert rnd['accuracy'] == pytest.approx(0.75) and rnd['cost_per_task'] == pytest.approx(6.0)
     assert Hn.auroc([0.9, 0.8, 0.1], [True, True, False]) == 1.0 and Hn.auroc([0.5], [True]) is None
+
+
+class _AlwaysAccept(V.FakeVerifier):
+    def _verify(self, task, candidate, rubric, kind, t0):
+        return V.Verdict(self.name, kind, 0.9, 'ok', 0.0, 0.0002, 'const')
+
+
+def test_demo_rows_curate_and_regrade(tmp_path, capsys):
+    tasks, cache = build_cache(tmp_path)
+    Hn.judge(tasks, cache, 'cheap', ['rival'], verifier_factory=lambda n: _AlwaysAccept(name='rival'),
+             log=lambda *a: None)
+    rows, judges = Hn.demo_rows(cache, 'cheap', 'strong', threshold=0.5)
+    assert judges == ['fake', 'rival'] and len(rows) == 40
+    t1 = next(r for r in rows if r['id'] == 't1')
+    assert t1['ideal'] == 'escalate' and t1['judges']['fake']['route'] == 'accept' and not t1['judges']['fake']['correct']
+    t3 = next(r for r in rows if r['id'] == 't3')
+    assert t3['judges']['fake']['cost'] == pytest.approx(0.01 + 0.0001 + 0.10)
+    s = Hn.demo_summary(rows, judges)
+    assert s['always_cheap']['accuracy'] == 0.5 and s['fake']['accuracy'] == pytest.approx(39 / 40)
+    assert s['rival']['strong_rate'] == 0.0 and s['fake']['right_route'] == pytest.approx(39 / 40)
+
+    sel = Hn.curate(cache, 'cheap', 'strong', ours='fake', n=10, accept_frac=0.5)
+    # the rival always accepts, so it is never wrong on accept tasks: every pick is an escalate task, t1 excluded
+    assert sel['picked'] == {'accept': 0, 'escalate': 10} and sel['available'] == {'accept': 0, 'escalate': 19}
+    assert 't1' not in sel['selected'] and 'not an estimate' in sel['note']
+    with pytest.raises(ValueError):
+        Hn.curate(cache, 'cheap', 'strong', ours='davi')
+
+    from judge_adapter.routing import cli
+    tj = tmp_path / 't.jsonl'
+    tj.write_text(''.join(json.dumps({'id': t.id, 'prompt': t.prompt, 'answer': t.answer}) + '\n' for t in tasks),
+                  encoding='utf-8')
+    out = tmp_path / 'demo' / 'demo.tasks.jsonl'
+    assert cli.main(['curate', '--tasks', str(tj), '--cache', cache, '--ours', 'fake', '--n', '4',
+                     '--out', str(out)]) == 0
+    assert len(out.read_text(encoding='utf-8').splitlines()) == 4
+    assert json.loads((tmp_path / 'demo' / 'demo.tasks.selection.json').read_text())['ours'] == 'fake'
+    assert cli.main(['demo', '--cache', cache, '--tasks', str(out)]) == 0
+    text = capsys.readouterr().out
+    assert 'always_strong' in text and 'rival' in text
+
+    flipped = [Hn.Task(t.id, t.prompt, answer='no') for t in tasks]      # every grade flips
+    assert Hn.regrade(flipped, cache, log=lambda *a: None) == 80
+    assert Hn.regrade(flipped, cache, log=lambda *a: None) == 0
+    rows, _ = Hn.demo_rows(cache, 'cheap', 'strong')
+    assert sum(r['cheap_ok'] for r in rows) == 20 and not any(r['strong_ok'] for r in rows)
 
 
 def test_cli_dry_run_and_analyze(tmp_path, capsys):

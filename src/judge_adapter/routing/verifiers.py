@@ -66,10 +66,14 @@ JEV_BASE_URL = 'https://api.typesafe.ai'
 JEV_PRICE_IN_PER_MTOK = 0.042          # ASSUMPTION (the "Jev-style list price" used in this repo's README); set yours
 JEV_PRICE_OUT_PER_MTOK = 0.0
 JEV_PRICE_NOTE = 'ASSUMED Jev prices ($0.042 in / $0 out per MTok) unless configured; not a bill'
-CLAUDE_DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
+CLAUDE_DEFAULT_MODEL = 'claude-haiku-5-5'   # Haiku 4.5 answered ~2% for right and wrong answers alike (2026-10-15)
 CLAUDE_BASE_URL = 'https://api.anthropic.com'
-CLAUDE_PRICE_IN_PER_MTOK = 1.00        # list price of the default model as checked 2026-09; set yours for another model
-CLAUDE_PRICE_OUT_PER_MTOK = 5.00
+CLAUDE_PRICE_IN_PER_MTOK = 0.10        # list price of the default model as checked 2026-10; set yours for another model
+CLAUDE_PRICE_OUT_PER_MTOK = 0.50
+# list prices (USD per MTok in / out, prompts <= 100K tokens) as checked 2026-10; unknown models use the defaults above
+CLAUDE_PRICES = {'claude-haiku-4-5': (1.00, 5.00), 'claude-haiku-5-5': (0.10, 0.50), 'claude-sonnet-5-5': (2.00, 10.00),
+                 'claude-opus-5-5': (4.00, 20.00)}
+CLAUDE_DEFAULT_EFFORT = 'low'
 ANTHROPIC_VERSION = '2023-06-01'
 CLAUDE_FORMAT_LINE = ('Reply with only an integer from 0 to 100: your probability, in percent, that "accept" is the '
                       'right option. No other text.')
@@ -210,7 +214,7 @@ class _HttpJudge(_Base):
 
     @staticmethod
     def _price(usage, p_in, p_out):
-        if not isinstance(usage, dict):
+        if not isinstance(usage, dict) or p_in is None:
             return None
         it, ot = usage.get('input_tokens'), usage.get('output_tokens')
         if not isinstance(it, int) or not isinstance(ot, int):
@@ -233,7 +237,10 @@ class JevVerifier(_HttpJudge):
         self.p_out = JEV_PRICE_OUT_PER_MTOK if usd_out_per_mtok is None else usd_out_per_mtok
 
     def _headers(self, key):
-        return {'Authorization': f'Bearer {key}', 'Content-Type': 'application/json', 'Accept': 'application/json'}
+        h = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+        if key:                                         # a self-served systemone endpoint may need no key
+            h['Authorization'] = f'Bearer {key}'
+        return h
 
     def body(self, task, candidate, rubric, kind):
         k = KINDS[kind]
@@ -261,23 +268,36 @@ _INT_RE = re.compile(r'\d{1,3}(?:\.\d+)?')
 
 
 def parse_percent(text):
-    m = _INT_RE.search(text or '')
-    if not m:
+    """The LAST 0-100 number in the reply: newer models may write a short reason (with its own numbers) first."""
+    found = _INT_RE.findall(text or '')
+    if not found:
         return None
-    v = float(m.group(0))
+    v = float(found[-1])
     return v / 100.0 if 0.0 <= v <= 100.0 else None
+
+
+_LEGACY_SAMPLING_RE = re.compile(r'claude-(?:3|(?:haiku|sonnet|opus)-4)')
+
+
+def uses_effort(model):
+    """Claude 5-generation models reject ``temperature`` and think by default; they take ``output_config.effort``."""
+    return not _LEGACY_SAMPLING_RE.match(model or '')
 
 
 class ClaudeVerifier(_HttpJudge):
     name = 'claude'
 
     def __init__(self, key_provider, model=CLAUDE_DEFAULT_MODEL, base_url=CLAUDE_BASE_URL, usd_in_per_mtok=None,
-                 usd_out_per_mtok=None, max_tokens=8, **kw):
+                 usd_out_per_mtok=None, max_tokens=None, effort=CLAUDE_DEFAULT_EFFORT, **kw):
         super().__init__(key_provider, base_url, **kw)
         self.model = model
-        self.max_tokens = max_tokens
-        self.p_in = CLAUDE_PRICE_IN_PER_MTOK if usd_in_per_mtok is None else usd_in_per_mtok
-        self.p_out = CLAUDE_PRICE_OUT_PER_MTOK if usd_out_per_mtok is None else usd_out_per_mtok
+        self.effort = effort
+        # thinking models need room for the (billed, hidden) reasoning before the number
+        self.max_tokens = max_tokens or (2048 if uses_effort(model) else 8)
+        listed = next((v for k, v in CLAUDE_PRICES.items() if model.startswith(k)), None)
+        d_in, d_out = listed or (CLAUDE_PRICE_IN_PER_MTOK, CLAUDE_PRICE_OUT_PER_MTOK)
+        self.p_in = d_in if usd_in_per_mtok is None else usd_in_per_mtok
+        self.p_out = d_out if usd_out_per_mtok is None else usd_out_per_mtok
 
     def _headers(self, key):
         return {'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json'}
@@ -291,8 +311,13 @@ class ClaudeVerifier(_HttpJudge):
         return '\n'.join(parts)
 
     def body(self, task, candidate, rubric, kind):
-        return {'model': self.model, 'max_tokens': self.max_tokens, 'temperature': 0.0,
-                'messages': [{'role': 'user', 'content': self.text(task, candidate, rubric, kind)}]}
+        b = {'model': self.model, 'max_tokens': self.max_tokens,
+             'messages': [{'role': 'user', 'content': self.text(task, candidate, rubric, kind)}]}
+        if uses_effort(self.model):
+            b['output_config'] = {'effort': self.effort}
+        else:
+            b['temperature'] = 0.0
+        return b
 
     def _verify(self, task, candidate, rubric, kind, t0):
         status, js, text = self._post('/v1/messages', self.body(task, candidate, rubric, kind))
@@ -342,6 +367,7 @@ SECRET_ENVS = {
     'davi': ('DAVI_ROUTE_RUNPOD_API_KEY', 'CLAUDE_PLUGIN_OPTION_RUNPOD_API_KEY', 'RUNPOD_API_KEY'),
     'jev': ('DAVI_ROUTE_TYPESAFE_API_KEY', 'CLAUDE_PLUGIN_OPTION_TYPESAFE_API_KEY', 'TYPESAFE_API_KEY'),
     'claude': ('DAVI_ROUTE_ANTHROPIC_API_KEY', 'CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY'),
+    'davi_systemone': ('DAVI_ROUTE_DAVI_API_KEY', 'CLAUDE_PLUGIN_OPTION_DAVI_API_KEY', 'DAVI_API_KEY'),   # optional
 }
 ENDPOINT_ENVS = ('DAVI_ROUTE_CHOICE_ENDPOINT_ID', 'CLAUDE_PLUGIN_OPTION_CHOICE_ENDPOINT_ID',
                  'JUDGE_ADAPTER_CHOICE_ENDPOINT_ID')
@@ -397,8 +423,26 @@ def build_verifier(name, env, transport=None, clock=time.perf_counter, sleep=tim
                               base_url=opt(env, 'claude_base_url', CLAUDE_BASE_URL),
                               usd_in_per_mtok=_fnum(env, 'claude_usd_in_per_mtok'),
                               usd_out_per_mtok=_fnum(env, 'claude_usd_out_per_mtok'), transport=transport,
+                              effort=opt(env, 'claude_judge_effort', CLAUDE_DEFAULT_EFFORT),
                               timeout=timeout, max_chars=max_chars, clock=clock)
-    # davi: the existing choice-endpoint backend
+    # davi served behind the same POST /v1/systemone shape as Jev (DAVI_BASE_URL): same body, P from probabilities.
+    # Cost is unknown unless per-MTok prices are configured (self-hosted: no list price).
+    davi_url = opt(env, 'davi_base_url') or (env.get('DAVI_BASE_URL') or '').strip()
+    if davi_url:
+        def davi_key():
+            for n in SECRET_ENVS['davi_systemone']:
+                if (env.get(n) or '').strip():
+                    return env[n].strip()
+            return None
+        v = JevVerifier(davi_key, model=opt(env, 'davi_model', 'davi'), base_url=davi_url,
+                        usd_in_per_mtok=_fnum(env, 'davi_usd_in_per_mtok'),
+                        usd_out_per_mtok=_fnum(env, 'davi_usd_out_per_mtok'), transport=transport, timeout=timeout,
+                        max_chars=max_chars, clock=clock)
+        v.name = 'davi'
+        if _fnum(env, 'davi_usd_in_per_mtok') is None:
+            v.p_in = v.p_out = None                     # never the Jev defaults: cost reported as unknown
+        return v
+    # davi: the existing RunPod choice-endpoint backend
     from ..contract import AdapterConfig
     from ..core import build_backend
     endpoint = None
