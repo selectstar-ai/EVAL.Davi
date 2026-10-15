@@ -8,7 +8,8 @@
             "type": "command",
             "command": "python3",
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/route_hook.py", "pre"],
-            "timeout": 15
+            "timeout": 130,
+            "statusMessage": "Choosing subagent model"
           }
         ]
       }

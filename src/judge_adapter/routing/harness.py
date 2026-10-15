@@ -343,24 +343,41 @@ def generate(tasks, arms, cache, workers=2, runner=run_claude, claude_bin='claud
         return list(ex.map(one, jobs))
 
 
+PRE_SUFFIX = ':pre'
+
+
+def judged_name(judge, kind):
+    """Cache name of a judge's results: ``davi`` for answers, ``davi:pre`` for task-only pre-routing, ..."""
+    return judge if kind == 'answer' else f'{judge}:{kind}'
+
+
+def is_pre(judge_name):
+    """Pre-routing results: an escalated task goes to the strong model directly (no cheap run is paid for)."""
+    return judge_name.endswith(PRE_SUFFIX)
+
+
 def judge(tasks, cache, source_arm, judges, env=None, workers=4, verifier_factory=None, kind='answer', log=print):
+    """Score ``source_arm``'s answers (``kind`` answer/completion), or, for a task-only kind (``pre``), the tasks
+    themselves; results are stored under ``source_arm`` so they line up with that arm's runs."""
     env = dict(os.environ if env is None else env)
     runs = latest(read_jsonl(os.path.join(cache, RUNS)), lambda r: (r['task_id'], r['arm']))
     jpath = os.path.join(cache, JUDGMENTS)
     have = latest(read_jsonl(jpath), lambda r: (r['task_id'], r['arm'], r['judge']))
     by_id = {t.id: t for t in tasks}
     factory = verifier_factory or (lambda name: V.build_verifier(name, env))
+    task_only = kind in V.TASK_ONLY_KINDS
     out = []
-    for name in judges:
-        ver = factory(name)
+    for judge_name in judges:
+        name = judged_name(judge_name, kind)
+        ver = factory(judge_name)
         todo = [(tid, r) for (tid, arm), r in runs.items() if arm == source_arm and tid in by_id
-                and (tid, arm, name) not in have and r.get('result') is not None]
-        log(f'judge {name}: {len(todo)} answers to score')
+                and (tid, arm, name) not in have and (task_only or r.get('result') is not None)]
+        log(f'judge {name}: {len(todo)} {"tasks" if task_only else "answers"} to score')
 
         def one(item, ver=ver, name=name):
             tid, r = item
             t = by_id[tid]
-            v = ver.verify(t.prompt, r['result'], rubric=t.rubric, kind=kind)
+            v = ver.verify(t.prompt, None if task_only else r['result'], rubric=t.rubric, kind=kind)
             rec = {'task_id': tid, 'arm': source_arm, 'judge': name, 'kind': kind, 'ts': time.time(), **v.to_dict()}
             rec['judge'] = name
             append_jsonl(jpath, rec)
@@ -408,14 +425,15 @@ def split_ids(ids, calib_frac, seed):
 
 
 def _point(rows, thr, on_error='accept'):
-    """Replay a threshold over rows: escalate when p < thr (p None -> on_error)."""
+    """Replay a threshold over rows: escalate when p < thr (p None -> on_error). A pre-routing row (``pre``) that
+    escalates pays judge + strong only: the cheap model never ran."""
     acc = cost = esc = 0.0
     for r in rows:
         p = r['p']
         e = (on_error == 'escalate') if p is None else p < thr
         esc += e
         acc += r['s'] if e else r['c']
-        cost += r['cc'] + (r['jc'] or 0.0) + (r['sc'] if e else 0.0)
+        cost += (0.0 if (e and r.get('pre')) else r['cc']) + (r['jc'] or 0.0) + (r['sc'] if e else 0.0)
     n = len(rows)
     return {'threshold': thr, 'escalation_rate': esc / n, 'accuracy': acc / n, 'cost_per_task': cost / n}
 
@@ -509,7 +527,8 @@ def analyze(cache, cheap, strong, calib_frac=0.3, seed=0, tolerance=0.02, on_err
             j = js.get((tid, cheap, judge_name))
             if j is None:
                 continue
-            rows.append({**b, 'p': j.get('p_accept'), 'jc': j.get('cost_usd'), 'lat': j.get('latency_s')})
+            rows.append({**b, 'p': j.get('p_accept'), 'jc': j.get('cost_usd'), 'lat': j.get('latency_s'),
+                         'pre': is_pre(judge_name)})
         if not rows:
             continue
         failed = sum(1 for r in rows if r['p'] is None)
@@ -679,8 +698,9 @@ def demo_rows(cache, cheap, strong, threshold=0.5, on_error='accept', task_ids=N
             route = route_of(p, threshold, on_error)
             esc = route == 'escalate'
             jc = v.get('cost_usd')
+            first = 0.0 if (esc and is_pre(j)) else cc          # pre-routing: an escalated task skips the cheap run
             row['judges'][j] = {'p': p, 'route': route, 'correct': row['strong_ok'] if esc else row['cheap_ok'],
-                                'judge_cost': jc, 'cost': cc + (jc or 0.0) + (sc if esc else 0.0),
+                                'judge_cost': jc, 'cost': first + (jc or 0.0) + (sc if esc else 0.0),
                                 'right_route': row['ideal'] is None or route == row['ideal']}
         rows.append(row)
     return rows, judges

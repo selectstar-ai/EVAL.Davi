@@ -16,10 +16,14 @@
 
 ## 판정자
 
-세 판정자 모두 같은 지시문과 같은 두 선택지(`accept` / `escalate`)를 받습니다. kind는 두 가지입니다.
+세 판정자 모두 같은 지시문과 같은 두 선택지(`accept` / `escalate`)를 받습니다. kind는 세 가지입니다.
 
 - `answer`: "이 답을 최종 답으로 써도 되는가, 강한 모델이 다시 풀어야 하는가"
 - `completion`: "에이전트가 정말 요청을 끝냈는가, 계속해야 하는가"
+- `pre`: 답이 나오기 **전에** 과제만 보고 "저비용 모델이 맞힐 것인가, 바로 강한 모델로 보낼 것인가" (사전 라우팅).
+  `candidate` 필드 없이 `task`(와 `rubric`)만 보냅니다. 하네스에서는 `judge --kind pre`로 돌리고 결과는
+  `<judge>:pre`(예: `davi:pre`)로 저장됩니다. 사전 라우팅에서 강한 모델로 보낸 과제는 저비용 실행 비용을 내지
+  않으므로 `analyze`/`demo`의 비용도 판정 + 강한 모델만으로 계산합니다.
 
 | judge | 호출 | P의 출처 | 비용 추정 |
 |---|---|---|---|
@@ -52,8 +56,8 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 
 | hook | 이벤트 | 동작 |
 |---|---|---|
-| A `post` | PostToolUse, matcher `^(Agent\|Task)$` | `tool_input.prompt`와 서브에이전트 결과를 판정. P < `route_threshold`이면 "model `opus`로 다시 위임하라"를 `additionalContext`(또는 `route_post_mode=block`이면 `decision: block`)로 전달하고, 세션의 다음 모델을 `opus`로 저장 |
-| E `pre` | PreToolUse, 같은 matcher | `updatedInput.model`을 설정. 저장된 다음 모델이 있으면 그것을 한 번 적용(에스컬레이션), 없으면 cheap 모델 고정(`route_pin_cheap`) |
+| A `post` | PostToolUse, matcher `^(Agent\|Task)$` | (`route_mode`가 `post`/`both`일 때) `tool_input.prompt`와 서브에이전트 결과를 판정. 이미 강한 모델로 실행된 결과는 판정하지 않음. P < `route_threshold`이면 "model `opus`로 다시 위임하라"를 `additionalContext`(또는 `route_post_mode=block`이면 `decision: block`)로 전달하고, 세션의 다음 모델을 `opus`로 저장 |
+| E `pre` | PreToolUse, 같은 matcher | `updatedInput.model`을 설정. 저장된 다음 모델이 있으면 그것을 한 번 적용(에스컬레이션). 없으면 `route_mode`가 `pre`/`both`일 때 과제만 판정(kind `pre`)해 P < `route_pre_threshold`이면 strong, 아니면 cheap 모델. `post`일 때는 cheap 모델 고정(`route_pin_cheap`) |
 | B `stop` | Stop (SubagentStop은 `stop_subagents=true`일 때) | transcript의 마지막 사용자 요청과 `last_assistant_message`로 완료 여부를 판정. P < `stop_threshold`이면 한 번 `decision: block` + 사유. 요청별 카운터와 연속 block 체인 카운터로 루프 방지 |
 
 **E에 대하여**: hook은 메인 세션의 모델을 바꿀 수 없습니다(문서상 PreModelSwitch는 허용·차단만 가능). 대신 다음
@@ -67,9 +71,11 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 
 | 키 | 기본값 | 설명 |
 |---|---|---|
-| `route_enabled` | false | A + E |
+| `route_enabled` | false | A + E 켜기/끄기 |
+| `route_mode` | post | `post`: cheap 먼저, 답을 판정해 필요하면 strong으로 재실행 / `pre`: 실행 전 과제만 판정해 cheap 또는 strong으로 바로 보냄(재실행 없음, 답을 보지 못함) / `both`: `pre`로 보낸 뒤 cheap으로 간 것만 답을 다시 판정 |
 | `route_judge` | davi | davi / jev / claude / fake |
-| `route_threshold` | 0.5 | P(accept)가 이 값보다 작으면 escalate |
+| `route_threshold` | 0.5 | (`post`/`both`) 답의 P(accept)가 이 값보다 작으면 escalate |
+| `route_pre_threshold` | 0.5 | (`pre`/`both`) 과제만 본 P(저비용 모델 성공)가 이 값보다 작으면 strong 모델로 바로 보냄 |
 | `route_cheap_model` / `route_strong_model` | haiku / opus | 모델 문자열 |
 | `route_pin_cheap` | always | always / if_unset / off |
 | `route_post_mode` | context | context / block |

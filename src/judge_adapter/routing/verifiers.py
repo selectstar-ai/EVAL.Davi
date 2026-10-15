@@ -15,9 +15,11 @@ Judges (same question wording and the same two options for all of them):
              configured per-MTok prices.
 - ``fake``   in-process, reads ``[[ACCEPT=p]]`` in the candidate (tests and dry runs).
 
-Kinds: ``answer`` (can this answer be used as final, or should a stronger model redo it?) and ``completion`` (is the
-agent's task actually complete, or should it continue?). In both, option ``accept`` means "keep / stop" and option
-``escalate`` means "redo with a stronger model / continue".
+Kinds: ``answer`` (can this answer be used as final, or should a stronger model redo it?), ``completion`` (is the
+agent's task actually complete, or should it continue?) and ``pre`` (from the task alone, before any answer: will the
+lower-cost model get it right, or should the task go to the stronger model directly?). In all of them option ``accept``
+means "keep / stop / send to the cheap model" and option ``escalate`` means "redo with a stronger model / continue /
+send to the strong model".
 
 No verifier raises: every failure is a Verdict with ``p_accept=None`` and ``outcome`` naming the reason. Keys are read
 lazily at the first request and are scrubbed from every detail string.
@@ -58,7 +60,19 @@ KINDS = {
         'accept': 'Complete: the requested task is done; the agent can stop.',
         'escalate': 'Not complete: something requested is missing or unverified; the agent should continue.',
     },
+    'pre': {
+        'instructions': (
+            'A lower-cost AI model is about to work on the task in the field "task"; it has not answered yet. Decide, '
+            'from the task alone, whether the lower-cost model is likely to answer it correctly and completely. If the '
+            'field "rubric" is present, apply it. Choose "accept" when the lower-cost model is likely to succeed. '
+            'Choose "escalate" when the task likely needs a stronger model (hard multi-step reasoning, rare or '
+            'specialised knowledge, long or exacting work), so that it goes to the stronger model directly.'),
+        'accept': 'Lower-cost model: it is likely to answer correctly; send the task to it.',
+        'escalate': 'Stronger model: the task likely needs it; send the task to the stronger model directly.',
+    },
 }
+# kinds judged from the task alone (no candidate answer)
+TASK_ONLY_KINDS = ('pre',)
 
 DEFAULT_MAX_CHARS = 24_000
 JEV_DEFAULT_MODEL = 'jev-latest'
@@ -106,7 +120,10 @@ def clip(text, max_chars=DEFAULT_MAX_CHARS):
 
 
 def state_of(task, candidate, rubric=None, max_chars=DEFAULT_MAX_CHARS):
-    st = {'task': clip(task or '', max_chars), 'candidate': clip(candidate or '', max_chars)}
+    """The judged state. ``candidate=None`` (a task-only kind such as ``pre``) leaves the field out."""
+    st = {'task': clip(task or '', max_chars)}
+    if candidate is not None:
+        st['candidate'] = clip(candidate, max_chars)
     if rubric:
         st['rubric'] = clip(rubric, max_chars)
     return st
@@ -130,9 +147,13 @@ class _Base:
         self.max_chars = max_chars
         self.scrub = Scrubber()
 
-    def verify(self, task, candidate, rubric=None, kind='answer'):
+    def verify(self, task, candidate=None, rubric=None, kind='answer'):
         if kind not in KINDS:
             raise ValueError(f'kind must be one of {sorted(KINDS)}')
+        if kind in TASK_ONLY_KINDS:
+            candidate = None
+        elif candidate is None:
+            candidate = ''
         t0 = self.clock()
         try:
             v = self._verify(task, candidate, rubric, kind, t0)
@@ -352,9 +373,10 @@ class FakeVerifier(_Base):
 
     def _verify(self, task, candidate, rubric, kind, t0):
         self.calls.append({'task': task, 'candidate': candidate, 'rubric': rubric, 'kind': kind})
-        if 'FAKE:ERROR' in (candidate or ''):
+        seen = task if candidate is None else candidate        # a task-only kind reads the marker in the task
+        if 'FAKE:ERROR' in (seen or ''):
             return Verdict(self.name, kind, None, 'error', 0.0, None, detail='fake error')
-        m = _ACCEPT_RE.search(candidate or '')
+        m = _ACCEPT_RE.search(seen or '')
         p = float(m.group(1)) if m else self.default
         return Verdict(self.name, kind, p, 'ok', 0.0, self.cost_usd, 'fake')
 

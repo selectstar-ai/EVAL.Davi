@@ -237,6 +237,58 @@ def test_E_pin_modes(tmp_path):
     assert out is None and rec['changed'] is False
 
 
+def test_pre_mode_routes_from_the_task_alone_and_skips_the_answer_check(tmp_path):
+    st, s = RH.State(str(tmp_path)), settings(route_mode='pre', route_pre_threshold=0.5)
+    ver = V.FakeVerifier()
+    hard = agent_payload('PreToolUse', model='sonnet')
+    hard['tool_input']['prompt'] = 'prove it [[ACCEPT=0.2]]'
+    out, rec = RH.process_pre(hard, s, st, ver)
+    assert out['hookSpecificOutput']['updatedInput']['model'] == 'opus' and rec['source'] == 'pre_route'
+    assert rec['decision'] == 'escalate' and ver.calls[-1]['kind'] == 'pre' and ver.calls[-1]['candidate'] is None
+    easy = agent_payload('PreToolUse', model='sonnet')
+    easy['tool_input']['prompt'] = 'add 2 and 2 [[ACCEPT=0.9]]'
+    out, rec = RH.process_pre(easy, s, st, ver)
+    assert out['hookSpecificOutput']['updatedInput']['model'] == 'haiku' and rec['decision'] == 'accept'
+    failed = agent_payload('PreToolUse', model='sonnet')
+    failed['tool_input']['prompt'] = 'FAKE:ERROR'
+    out, rec = RH.process_pre(failed, s, st, ver)                                       # fail-open: cheap model
+    assert out['hookSpecificOutput']['updatedInput']['model'] == 'haiku' and rec['status'] == 'verifier_failed'
+    out, rec = RH.process_post(agent_payload('PostToolUse'), s, ver, st)               # pre mode: no answer check
+    assert out is None and rec['status'] == 'mode_pre'
+    out, rec = RH.process_pre(agent_payload('PreToolUse'), settings(), st, ver)        # post mode: pin, no call
+    assert rec['source'] == 'pin_cheap' and len(ver.calls) == 3
+
+
+def test_both_mode_checks_only_what_went_to_the_cheap_model(tmp_path):
+    st, s, ver = RH.State(str(tmp_path)), settings(route_mode='both'), V.FakeVerifier()
+    out, rec = RH.process_post(agent_payload('PostToolUse', model='haiku'), s, ver, st)
+    assert rec['decision'] == 'escalate' and len(ver.calls) == 1
+    out, rec = RH.process_pre(agent_payload('PreToolUse', model='haiku'), s, st, ver)  # the pending re-run wins
+    assert out['hookSpecificOutput']['updatedInput']['model'] == 'opus' and rec['source'] == 'escalation'
+    strong = agent_payload('PostToolUse', model='opus')
+    strong['tool_response']['resolvedModel'] = 'claude-opus-5-5'
+    out, rec = RH.process_post(strong, s, ver, st)
+    assert out is None and rec['reason'] == 'already_strong' and len(ver.calls) == 1   # no second verifier call
+    with pytest.raises(RH.ConfigError):
+        settings(route_mode='sometimes')
+
+
+def test_harness_pre_judging_and_its_cost(tmp_path):
+    tasks, cache = build_cache(tmp_path)
+    marked = [Hn.Task(t.id, t.prompt + (' [[ACCEPT=0.9]]' if int(t.id[1:]) % 2 == 0 else ' [[ACCEPT=0.1]]'))
+              for t in tasks]
+    Hn.judge(marked, cache, 'cheap', ['fake'], kind='pre', verifier_factory=lambda n: V.FakeVerifier(),
+             log=lambda *a: None)
+    rows, judges = Hn.demo_rows(cache, 'cheap', 'strong')
+    assert judges == ['fake', 'fake:pre']
+    odd = next(r for r in rows if r['id'] == 't3')
+    assert odd['judges']['fake:pre']['route'] == 'escalate'
+    assert odd['judges']['fake:pre']['cost'] == pytest.approx(0.10)              # strong only: haiku never ran
+    assert odd['judges']['fake']['cost'] == pytest.approx(0.01 + 0.0001 + 0.10)
+    rep = Hn.analyze(cache, 'cheap', 'strong', calib_frac=0.5, seed=1)
+    assert rep['judges']['fake:pre']['baselines']['always_strong']['accuracy'] == 1.0
+
+
 def write_transcript(path, user='Fix the failing test in foo.py', assistant='Done, all tests pass.'):
     lines = [{'type': 'user', 'message': {'role': 'user', 'content': user}},
              {'type': 'assistant', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'working'}]}},
@@ -364,7 +416,7 @@ def test_plugin_manifest_matches_settings():
             (h,) = e['hooks']
             assert h['args'][0] == '${CLAUDE_PLUGIN_ROOT}/hooks/route_hook.py' and h['args'][1] in (
                 'pre', 'post', 'stop', 'subagent_stop')
-            assert h['timeout'] > (5 if ev == 'PreToolUse' else defaults.wall_budget_seconds)
+            assert h['timeout'] > defaults.wall_budget_seconds
 
 
 # --- harness (C) ----------------------------------------------------------------------------------------------------

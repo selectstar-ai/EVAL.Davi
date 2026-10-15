@@ -2,16 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 """Claude Code hook logic for routing experiments (loaded by ``plugins/davi-route/hooks/route_hook.py``).
 
-Three hooks, all default-off, fail-open (any error leaves Claude Code's behaviour unchanged), one JSON log line each:
+Three hooks, all default-off, fail-open (any error leaves Claude Code's behaviour unchanged), one JSON log line each.
+``route_mode`` picks how A and E route subagents (``route_enabled`` turns both on or off):
+
+- ``post`` (default)  cheap model first (E pins it), A verifies the answer and asks for a strong re-run when needed.
+- ``pre``             E judges the task alone before the subagent runs and sends it to the cheap or the strong model
+                      directly; A does not verify. Nothing runs twice, but the judge never sees an answer.
+- ``both``            E routes up front as in ``pre``; a task sent to the cheap model is then verified by A as in
+                      ``post``. A task already sent to the strong model is not verified again.
 
 A  ``post``  PostToolUse on the Agent tool. The verifier reads the subagent's task (``tool_input.prompt``) and result
              (``tool_response``) and returns P(accept). Below the threshold the hook (1) tells the main agent to re-run
              the task with the strong model (``additionalContext``, or ``decision: block`` + reason in ``block`` mode)
              and (2) stores the strong model as the session's pending next model (for E).
 E  ``pre``   PreToolUse on the Agent tool. Sets ``tool_input.model`` through ``updatedInput``: the pending next model
-             stored by A if there is one (one-shot), else the cheap model (``route_pin_cheap``). This is how "the next
-             model as a string" reaches Claude Code: per Agent call, not for the main session (no hook can switch the
-             main session's model).
+             stored by A if there is one (one-shot); else, in ``pre``/``both`` mode, the model a task-only verdict
+             (kind ``pre``, threshold ``route_pre_threshold``) picks; else the cheap model (``route_pin_cheap``). This
+             is how "the next model as a string" reaches Claude Code: per Agent call, not for the main session (no
+             hook can switch the main session's model).
 B  ``stop``  Stop (and, if enabled, SubagentStop). The verifier reads the user's request (last user prompt in the
              transcript) and the final assistant message and returns P(complete). Below the threshold it blocks the
              stop once (``decision: block`` + reason), at most ``stop_max_blocks`` times per request.
@@ -32,7 +40,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import verifiers as V
-from .policy import RoutePolicy
+from .policy import RoutePolicy, same_model
 
 AGENT_TOOLS = ('Agent', 'Task')
 LOG_EVENT = 'davi-route'
@@ -41,6 +49,7 @@ PENDING_TTL_SECONDS = 1800
 TRUE_WORDS, FALSE_WORDS = ('1', 'true', 'yes', 'on'), ('0', 'false', 'no', 'off')
 PIN_MODES = ('always', 'if_unset', 'off')
 POST_MODES = ('context', 'block')
+ROUTE_MODES = ('post', 'pre', 'both')
 
 
 class ConfigError(ValueError):
@@ -82,8 +91,10 @@ def _choice(env, key, default, allowed):
 @dataclass(frozen=True)
 class Settings:
     route_enabled: bool = False
+    route_mode: str = 'post'
     route_judge: str = 'davi'
     route_threshold: float = 0.5
+    route_pre_threshold: float = 0.5
     route_cheap_model: str = 'haiku'
     route_strong_model: str = 'opus'
     route_pin_cheap: str = 'always'
@@ -107,14 +118,20 @@ class Settings:
     def policy(self):
         return RoutePolicy(self.route_threshold, self.route_strong_model, self.route_cheap_model, self.on_error)
 
+    @property
+    def pre_policy(self):
+        return RoutePolicy(self.route_pre_threshold, self.route_strong_model, self.route_cheap_model, self.on_error)
+
 
 def load_settings(env):
     types = tuple(t.strip() for t in (V.opt(env, 'route_agent_types') or '').split(',') if t.strip())
     judges = V.JUDGES
     return Settings(
         route_enabled=_flag(env, 'route_enabled', False),
+        route_mode=_choice(env, 'route_mode', 'post', ROUTE_MODES),
         route_judge=_choice(env, 'route_judge', 'davi', judges),
         route_threshold=_num(env, 'route_threshold', 0.5, 0.0, 1.0),
+        route_pre_threshold=_num(env, 'route_pre_threshold', 0.5, 0.0, 1.0),
         route_cheap_model=V.opt(env, 'route_cheap_model', 'haiku'),
         route_strong_model=V.opt(env, 'route_strong_model', 'opus'),
         route_pin_cheap=_choice(env, 'route_pin_cheap', 'always', PIN_MODES),
@@ -309,8 +326,12 @@ def process_post(payload, s, verifier, state):
         ctx = (f'Hook probe marker: {marker}. If you can read this line, include the marker verbatim in your final '
                'answer.')
         return {'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': ctx}}, rec
+    if s.route_mode == 'pre':
+        return None, {**rec, 'status': 'mode_pre'}
     if s.route_agent_types and tin.get('subagent_type') not in s.route_agent_types:
         return None, {**rec, 'status': 'type_skipped'}
+    if any(same_model(m, s.route_strong_model) for m in (model_in, rec['resolved_model']) if m):
+        return None, {**rec, 'status': 'ok', 'decision': 'accept', 'reason': 'already_strong'}
     task = tin.get('prompt') or tin.get('description') or ''
     result = response_text(payload.get('tool_response'))
     rec.update(task_sha=_h(task, 12), result_chars=len(result))
@@ -331,8 +352,9 @@ def process_post(payload, s, verifier, state):
     return {'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': msg}}, rec
 
 
-def process_pre(payload, s, state):
-    """E. -> (hook output dict or None, log record). No verifier call."""
+def process_pre(payload, s, state, verifier=None):
+    """E. -> (hook output dict or None, log record). Calls ``verifier`` (kind ``pre``) only in ``pre``/``both`` mode
+    when no escalation is pending."""
     tin = payload.get('tool_input') if isinstance(payload.get('tool_input'), dict) else {}
     requested = tin.get('model')
     rec = {'hook': 'pre', 'tool': payload.get('tool_name'), 'agent_type': tin.get('subagent_type'),
@@ -346,8 +368,17 @@ def process_pre(payload, s, state):
         if s.route_agent_types and tin.get('subagent_type') not in s.route_agent_types:
             return None, {**rec, 'status': 'type_skipped'}
         pending = state.take_pending(payload.get('session_id', ''))
+        task = tin.get('prompt') or tin.get('description') or ''
         if pending:
             target, source = pending['model'], 'escalation'
+        elif s.route_mode in ('pre', 'both') and verifier is not None and task.strip():
+            v = verifier.verify(task, kind='pre')
+            route = s.pre_policy.decide(v.p_accept)
+            target, source = (route.next_model if route.decision == 'escalate' else s.route_cheap_model), 'pre_route'
+            rec.update(judge=v.judge, p_accept=v.p_accept, outcome=v.outcome, decision=route.decision,
+                       reason=route.reason, threshold=s.route_pre_threshold, latency_s=round(v.latency_s, 4),
+                       cost_usd=v.cost_usd, judge_model=v.model, task_sha=_h(task, 12),
+                       status='ok' if v.outcome == 'ok' else 'verifier_failed')
         elif s.route_pin_cheap == 'always' or (s.route_pin_cheap == 'if_unset' and not requested):
             target, source = s.route_cheap_model, 'pin_cheap'
         else:
@@ -470,13 +501,15 @@ def main(kind, stdin=None, stdout=None, stderr=None, env=None, transport=None, v
     state = State(state_dir(env), now=now)
 
     def run():
-        if kind == 'pre':
-            return process_pre(payload, s, state)
-        judge = s.route_judge if kind == 'post' else (s.stop_judge or s.route_judge)
+        judge = s.route_judge if kind in ('pre', 'post') else (s.stop_judge or s.route_judge)
+        needs = not s.probe and not (kind == 'pre' and s.route_mode == 'post') \
+            and not (kind == 'post' and s.route_mode == 'pre')
         ver = verifier
-        if ver is None and not s.probe:
+        if ver is None and needs:
             ver = V.build_verifier(judge, env, transport=transport)
         try:
+            if kind == 'pre':
+                return process_pre(payload, s, state, ver if needs else None)
             if kind == 'post':
                 return process_post(payload, s, ver, state)
             return process_stop(payload, s, ver, state)
