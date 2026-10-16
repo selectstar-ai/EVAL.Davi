@@ -386,8 +386,8 @@ textarea {
 .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 
 .lane { display: flex; flex-direction: column; gap: 12px; }
-.lane-head { display: flex; justify-content: space-between; align-items: baseline; }
-.lane-sub { color: var(--faint); font-size: 12px; }
+.lane-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.lane-sub { color: var(--muted); font-size: 13px; font-weight: 600; }
 
 .model-badge {
   display: flex;

@@ -2,8 +2,8 @@
 
 const MODEL_KINDS = { haiku: '가벼운 모델', sonnet: '중간 모델', opus: '고성능 모델' };
 const ARM_TEXT = {
-  routed: { sub: 'Davi가 난이도를 보고 모델을 고름' },
-  opus: { sub: '언제나 고성능 모델(opus)' },
+  routed: { sub: '서브에이전트는 Davi가 고름', judge: '판정 중…' },
+  opus: { sub: '서브에이전트는 언제나 opus', judge: '판정 없음' },
 };
 
 const app = {
@@ -240,7 +240,8 @@ function drawLane(arm) {
   lane.replaceChildren($('lane-template').content.cloneNode(true));
   lane.querySelector('.lane-title').textContent = arm.label;
   lane.querySelector('.lane-sub').textContent = (ARM_TEXT[arm.key] || {}).sub || '';
-  app.run.lanes[arm.key] = { node: lane, started: null, done: false };
+  lane.querySelector('.fact-judge').textContent = (ARM_TEXT[arm.key] || {}).judge || '-';
+  app.run.lanes[arm.key] = { node: lane, started: null, done: false, main: null, sub: null };
   setLaneStatus(arm.key, '시작 대기', false);
 }
 
@@ -248,6 +249,17 @@ function setLaneStatus(key, text, running) {
   const status = app.run.lanes[key].node.querySelector('.lane-status');
   status.textContent = text;
   status.classList.toggle('running', running);
+}
+
+function setFlow(key) {
+  const lane = app.run.lanes[key];
+  const sub = lane.sub || (key === 'routed' ? 'Davi가 고름' : 'opus');
+  lane.node.querySelector('.lane-sub').textContent =
+    `메인 ${lane.main || '-'} → 서브에이전트 ${sub}`;
+}
+
+function tokens(value) {
+  return typeof value === 'number' ? `${value.toLocaleString('ko-KR')} 토큰` : '-';
 }
 
 function setBadge(key, model) {
@@ -293,6 +305,11 @@ function onJudge(data) {
 }
 
 function onRouting(data) {
+  const lane = app.run.lanes[data.arm];
+  if (lane) {
+    lane.sub = modelKey(data.model_set || data.model_requested) || lane.sub;
+    setFlow(data.arm);
+  }
   if (data.arm === 'opus') {
     setBadge('opus', data.model_set || 'opus');
     setLaneStatus('opus', `${data.model_set || 'opus'}로 풀이 중`, true);
@@ -314,20 +331,35 @@ function onRouting(data) {
     $('gauge-verdict').textContent = `판단 실패 → 기본값 ${model || '모델'} 사용`;
   }
   setBadge('routed', model);
+  lane.node.querySelector('.fact-judge').textContent =
+    typeof data.latency_s === 'number' ? seconds(data.latency_s) : '실패';
   setLaneStatus('routed', `${model}로 풀이 중`, true);
   setStep(4);
 }
 
 function onSubagent(data) {
   const lane = app.run.lanes[data.arm];
-  if (!lane || !data.resolved_model) return;
-  lane.node.querySelector('.fact-model').textContent = `${data.resolved_model} ✓`;
+  if (!lane) return;
+  const node = lane.node;
+  if (data.resolved_model) {
+    node.querySelector('.fact-model').textContent = `${data.resolved_model} ✓`;
+  }
+  if (typeof data.subagent_ms === 'number') {
+    node.querySelector('.fact-sub-time').textContent = seconds(data.subagent_ms / 1000);
+  }
+  const output = data.subagent_output_tokens ?? data.subagent_tokens;
+  if (typeof output === 'number') {
+    node.querySelector('.fact-sub-tokens').textContent = tokens(output);
+    lane.subTokens = true;
+  }
 }
 
 function onSessionStarted(data) {
   const lane = app.run.lanes[data.arm];
   if (!lane) return;
   lane.started = performance.now();
+  lane.main = modelKey(data.main_model) || data.main_model;
+  setFlow(data.arm);
   setLaneStatus(data.arm, '질문을 읽고 서브에이전트에게 맡기는 중', true);
 }
 
@@ -351,6 +383,11 @@ function onSessionDone(data) {
     setLaneStatus(data.arm, '완료', false);
   }
   drawUsage(data);
+  if (!lane.subTokens && lane.sub && lane.sub !== lane.main) {
+    const entry = Object.entries(data.model_usage || {})
+      .find(([model]) => modelKey(model) === lane.sub);
+    if (entry) node.querySelector('.fact-sub-tokens').textContent = tokens(entry[1].outputTokens);
+  }
   if (Object.values(app.run.lanes).every((item) => item.done)) setStep(5);
 }
 

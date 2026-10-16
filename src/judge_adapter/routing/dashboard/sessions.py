@@ -39,6 +39,14 @@ EXTRA_ARGS = (
     'WebFetch',
 )
 MAX_RESULT_CHARS = 4000
+SUBAGENT_FIELDS = (
+    'resolved_model',
+    'subagent_ms',
+    'subagent_tokens',
+    'subagent_output_tokens',
+    'subagent_tool_uses',
+    'subagent_status',
+)
 POLL_SECONDS = 0.25
 
 
@@ -87,7 +95,7 @@ class SessionConfig:
 
     plugin_dir: str
     claude_bin: str = 'claude'
-    main_model: str = 'sonnet'
+    main_model: str = 'opus'
     timeout: int = 900
     budget_usd: float = 1.0
     env: dict = field(default_factory=dict)  # source of passthrough envs
@@ -188,7 +196,7 @@ class ClaudeSession:
                     {
                         'arm': self._arm.key,
                         'model_in': record.get('model_in'),
-                        'resolved_model': record.get('resolved_model'),
+                        **{key: record.get(key) for key in SUBAGENT_FIELDS},
                     },
                 )
 

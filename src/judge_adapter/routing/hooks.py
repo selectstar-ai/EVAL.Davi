@@ -317,6 +317,31 @@ def response_text(response):
     return json.dumps(response, ensure_ascii=False, default=str)
 
 
+def subagent_stats(response):
+    """Numbers about a finished subagent from the Agent tool response
+    (duration, tokens, tool uses); never its text."""
+    if not isinstance(response, dict):
+        return {}
+    usage = response.get('usage')
+    usage = usage if isinstance(usage, dict) else {}
+    found = {
+        'subagent_ms': response.get('totalDurationMs'),
+        'subagent_tokens': response.get('totalTokens'),
+        'subagent_tool_uses': response.get('totalToolUseCount'),
+        'subagent_output_tokens': usage.get('output_tokens'),
+    }
+    stats = {
+        key: value
+        for key, value in found.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    status = response.get('status')
+    if isinstance(status, str) and len(status) <= 32:
+        stats['subagent_status'] = status
+    stats['response_keys'] = sorted(str(key) for key in response)[:20]
+    return stats
+
+
 def payload_shape(node, depth=0):
     """Keys and types only, never values (for probe logs)."""
     if depth > 3:
@@ -553,6 +578,7 @@ class AgentPostHook(AgentToolHook):
             'agent_type': tool_input.get('subagent_type'),
             'model_in': model_in,
             'resolved_model': resolved,
+            **subagent_stats(response),
         }
         if settings.probe:
             return self._probe(payload, tool_input, record)

@@ -143,8 +143,8 @@ A local web page (Korean, for non-engineers) that shows routing happen inside re
 davi-route dashboard --tasks demo.tasks.jsonl --open     # http://127.0.0.1:8765/
 ```
 
-- **Live run:** pick a question; two headless Claude Code sessions solve it at once, one with Davi routing and one
-  with every subagent pinned to opus. The page shows Davi's difficulty gauge and the model it picked, the model
+- **Live run:** pick a question; two headless Claude Code sessions solve it at once, both with an opus main agent:
+  one with Davi routing the subagent, one with every subagent pinned to opus. The page shows Davi's difficulty gauge and the model it picked, the model
   that actually ran (`resolvedModel`), time, cost, the graded answer of both sessions, and where Davi, Jev and
   Claude would each have sent the same question. A running total of the savings stays in the header.
 - **Replay:** every live run is saved to `dashboard-recordings/` (git-ignored: it holds the question and answers)

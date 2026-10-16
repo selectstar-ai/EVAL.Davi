@@ -1471,3 +1471,24 @@ def test_probe_runner_with_fake_claude(tmp_path):
     expected = ('1a', '1b', '2', '3a', '3b', '3c', '4')
     assert got == {key: 'pass' for key in expected}, report['checks']
     assert (tmp_path / 'probe' / 'probe-report.json').is_file()
+
+
+def test_post_record_keeps_subagent_numbers_but_no_text(tmp_path):
+    payload = agent_payload('PostToolUse', model='opus')
+    payload['tool_response'].update(
+        totalDurationMs=5120,
+        totalToolUseCount=2,
+        usage={'output_tokens': 345, 'input_tokens': 9},
+        status='completed',
+        resolvedModel='claude-opus-5-5',
+    )
+    _, record = run_post(
+        payload, settings(), FakeVerifier(), State(str(tmp_path))
+    )
+    assert record['subagent_ms'] == 5120
+    assert record['subagent_output_tokens'] == 345
+    assert record['subagent_tool_uses'] == 2
+    assert record['subagent_status'] == 'completed'
+    assert 'content' in record['response_keys']
+    assert 'wrong' not in json.dumps(record)
+    assert route_hooks.subagent_stats('text') == {}

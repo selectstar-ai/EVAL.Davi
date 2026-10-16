@@ -78,6 +78,8 @@ def fake_runner(seen):
                     kind='post',
                     model_in=model,
                     resolved_model=f'claude-{model}-5-5',
+                    subagent_ms=4200,
+                    subagent_output_tokens=321,
                 )
             )
         return {
@@ -180,7 +182,7 @@ def test_sessions_never_get_the_anthropic_key(tmp_path):
     assert 'DAVI_BASE_URL' not in env
     assert env['DAVI_ROUTE_ROUTE_CHEAP_MODEL'] == 'opus'
     command = routed.command(TASK)
-    assert command[command.index('--model') + 1] == 'sonnet'
+    assert command[command.index('--model') + 1] == 'opus'
     assert '--plugin-dir' in command and 'WebSearch' in command
 
 
@@ -204,6 +206,9 @@ def test_live_run_events_summary_and_recording(tmp_path):
     assert {data['arm'] for data in routing} == {'routed', 'opus'}
     routed = next(data for data in routing if data['arm'] == 'routed')
     assert routed['tier_label'] == '가벼운 모델'
+    subagent = next(e.data for e in events if e.type == 'subagent')
+    assert subagent['subagent_ms'] == 4200
+    assert subagent['subagent_output_tokens'] == 321
     judges = {e.data['judge']: e.data for e in events if e.type == 'judge'}
     assert judges['davi']['model'] == 'haiku'  # fake: level = 1 - p
     assert judges['claude']['model'] == 'opus'

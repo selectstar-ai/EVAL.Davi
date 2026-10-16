@@ -99,7 +99,8 @@ def cmd_dashboard(args):
     if app.live_enabled:
         print(
             '  live runs ON: each run starts two claude -p sessions '
-            '(routed + always opus) and spends money'
+            f'(routed + always opus, main agent {args.main_model}) and '
+            'spends money'
         )
     else:
         print(f'  live runs OFF: {app.state()["live"]["problem"]}')
@@ -172,7 +173,11 @@ def _add_common(parser):
     parser.add_argument('--record-dir', default=default_record_dir())
     parser.add_argument('--plugin-dir', default='plugins/davi-route')
     parser.add_argument('--claude-bin', default='claude')
-    parser.add_argument('--main-model', default='sonnet')
+    parser.add_argument(
+        '--main-model',
+        default='opus',
+        help='main agent model of both sessions (default opus)',
+    )
     parser.add_argument('--timeout', type=int, default=900)
     parser.add_argument('--budget-usd', type=float, default=1.0)
     parser.add_argument('--tier-low', type=float, default=TierPolicy.low)
