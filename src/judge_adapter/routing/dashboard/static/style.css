@@ -24,8 +24,8 @@
   --haiku-bg: rgba(63, 199, 166, 0.1);
   --sonnet: #e5b450;
   --sonnet-bg: rgba(229, 180, 80, 0.1);
-  --opus: #a493ff;
-  --opus-bg: rgba(164, 147, 255, 0.12);
+  --opus: #f0875f;
+  --opus-bg: rgba(240, 135, 95, 0.12);
   --judge: #f26b9b;
   --sans: "Inter", "Pretendard Variable", "Pretendard", -apple-system, "Apple SD Gothic Neo", system-ui, sans-serif;
   --serif: var(--sans);
@@ -578,23 +578,66 @@ textarea:focus { outline: 1px solid var(--accent); }
   --anatomy-card: var(--surface);
   --anatomy-paper: var(--surface);
   --anatomy-face: #1a1b1e;
-  --anatomy-top: #1b1c1f;
+  --anatomy-top: #1d1e21;
   --anatomy-shade-0: #0d0e0f;
   --anatomy-shade-1: #111214;
-  --anatomy-shade-2: #141517;
-  --anatomy-shade-3: #17181b;
-  --anatomy-lit-top: #2a2a46;
-  --anatomy-lit-shade: #1e1e33;
-  --anatomy-lit: #a9a8ff;
+  --anatomy-shade-2: #151618;
+  --anatomy-shade-3: #191a1d;
+  --anatomy-lit-top: #34363b;
+  --anatomy-lit-shade: #26282c;
+  --anatomy-lit: #ffffff;
   --anatomy-halo: #000000;
   background: transparent;
 }
 .bench .flow-svg { display: block; }
 .bench-flow { opacity: 0; stroke-width: 1.6 !important; stroke-dasharray: 2 6; transition: opacity 0.25s; }
 .bench-flow.on { opacity: 1; animation: iso-flow 0.9s linear infinite; }
-.bench-idle { opacity: 0.78; }
-.bench-legend { margin: 0; color: var(--faint); font-size: 11.5px; line-height: 1.6; }
-.bench-legend b { color: var(--muted); font-family: var(--mono); font-weight: 500; font-size: 10.5px; }
+.bench-idle { opacity: 0.8; }
 .bench .flow-svg[data-result="wrong"] [data-part="stamp"] .iso-edge { stroke: var(--bad); }
 .bench .flow-svg[data-result="correct"] [data-part="stamp"] .iso-edge { stroke: var(--good); }
+
+/* our parts: Davi, the davi-route hook and its cable */
+.bench .ours > .iso-edge { stroke: var(--accent); }
+.bench .ours > .iso-top { fill: #25244d; }
+.bench .ours > .iso-shade[data-shade="0"] { fill: #15142b; }
+.bench .ours > .iso-shade[data-shade="1"] { fill: #191833; }
+.bench .ours > .iso-shade[data-shade="2"] { fill: #1d1c3b; }
+.bench .ours > .iso-shade[data-shade="3"] { fill: #211f43; }
+.bench .ours[data-lit] > .iso-top { fill: #3c3a85; }
+.bench .ours[data-lit] > .iso-edge { stroke: #c2c1ff; }
+.bench .ours[data-lit] { filter: drop-shadow(0 0 10px rgba(113, 112, 255, 0.65)); }
+.bench .ours-wire .iso-line { stroke: var(--accent); }
+.bench .ours-wire .iso-wire-end { stroke: var(--accent); }
+.bench .ours-flow { stroke: #d6d5ff !important; }
+.bench .ours-needle { stroke: #c2c1ff; }
+.bench .sign > .iso-top { fill: #222327; }
+
+/* the model bays in their colours */
+.bench .bay-haiku > .iso-edge, .bench .lamp-haiku > .iso-edge { stroke: var(--haiku); }
+.bench .bay-sonnet > .iso-edge, .bench .lamp-sonnet > .iso-edge { stroke: var(--sonnet); }
+.bench .bay-opus > .iso-edge, .bench .lamp-opus > .iso-edge { stroke: var(--opus); }
+.bench .bay[data-lit] > .iso-top { fill: #2c2d31; }
+.bench .lamp-haiku[data-lit] > .iso-top { fill: var(--haiku); }
+.bench .lamp-sonnet[data-lit] > .iso-top { fill: var(--sonnet); }
+.bench .lamp-opus[data-lit] > .iso-top { fill: var(--opus); }
+.bench .bay-haiku[data-lit] { filter: drop-shadow(0 0 9px rgba(63, 199, 166, 0.55)); }
+.bench .bay-sonnet[data-lit] { filter: drop-shadow(0 0 9px rgba(229, 180, 80, 0.55)); }
+.bench .bay-opus[data-lit] { filter: drop-shadow(0 0 9px rgba(240, 135, 95, 0.55)); }
+
+/* tags: name, time, probability */
+.bench-tag-line { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 2; }
+.bench-tag-box { fill: rgba(15, 16, 17, 0.92); stroke: var(--border); stroke-width: 1; }
+.bench-tag-title { fill: var(--muted); font-family: var(--sans); font-size: 10px; font-weight: 500; }
+.bench-tag-value { fill: var(--ink); font-family: var(--sans); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bench-tag[data-state="active"] .bench-tag-box { stroke: var(--ink); }
+.bench-tag[data-state="chosen"] .bench-tag-box { stroke-width: 1.4; }
+.bench-tag[data-state="wrong"] .bench-tag-box { stroke: var(--bad); }
+.bench-tag-davi .bench-tag-box, .flow-routed .bench-tag-hook .bench-tag-box { stroke: var(--accent); fill: rgba(30, 29, 64, 0.95); }
+.bench-tag-davi .bench-tag-title, .flow-routed .bench-tag-hook .bench-tag-title { fill: #b9b8ff; }
+.bench-tag-haiku[data-state="chosen"] .bench-tag-box { stroke: var(--haiku); }
+.bench-tag-sonnet[data-state="chosen"] .bench-tag-box { stroke: var(--sonnet); }
+.bench-tag-opus[data-state="chosen"] .bench-tag-box { stroke: var(--opus); }
+.bench-tag-haiku .bench-tag-title { fill: var(--haiku); }
+.bench-tag-sonnet .bench-tag-title { fill: var(--sonnet); }
+.bench-tag-opus .bench-tag-title { fill: var(--opus); }
 @media (prefers-reduced-motion: reduce) { .bench-flow.on { animation: none; } }

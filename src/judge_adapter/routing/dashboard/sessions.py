@@ -212,6 +212,7 @@ class ClaudeSession:
             'model_requested': record.get('model_requested'),
             'model_set': record.get('model_set'),
             'level': record.get('level'),
+            'level_probabilities': record.get('level_probabilities'),
             'tier': tier,
             'tier_label': TIER_LABELS.get(tier),
             'tier_low': record.get('tier_low'),

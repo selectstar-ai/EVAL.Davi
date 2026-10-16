@@ -243,6 +243,18 @@ def tier_level(probabilities):
     )
 
 
+def level_shares(probabilities):
+    """``{'1': p, ..., '5': p}`` normalized to sum 1, rounded; None when
+    unusable."""
+    if tier_level(probabilities) is None:
+        return None
+    total = sum(probabilities[level] for level, _ in TIER_LEVELS)
+    return {
+        level: round(probabilities[level] / total, 4)
+        for level, _ in TIER_LEVELS
+    }
+
+
 def mean_logit_probability(probabilities):
     """The probability whose logit is the mean logit of ``probabilities``."""
     logits = []

@@ -512,6 +512,7 @@ class AgentPreHook(AgentToolHook):
         record.update(
             self._verdict_fields(verdict),
             level=verdict.level,
+            level_probabilities=verdict.levels,
             tier=tier,
             task_sha=short_hash(task, 12),
             tier_low=policy.low,

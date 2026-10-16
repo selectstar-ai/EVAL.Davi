@@ -53,6 +53,7 @@ from .questions import (
     TASK_ONLY_KINDS,
     TIER_LEVELS,
     clip,
+    level_shares,
     mean_logit_probability,
     state_of,
     tier_level,
@@ -123,6 +124,9 @@ class Verdict:
     usage: dict | None = None
     detail: str | None = None
     level: float | None = None  # kind 'tier' only: difficulty in [0, 1]
+    # kind 'tier' only, when the judge answers with probabilities:
+    # {'1': p, ..., '5': p}, normalized
+    levels: dict | None = None
 
     def to_dict(self):
         return dataclasses.asdict(self)
@@ -528,6 +532,7 @@ class SystemOneVerifier(HttpVerifier):
             usage,
             reading['detail'],
             level=reading['level'],
+            levels=reading.get('levels'),
         )
 
     def _read(self, kind, answers):
@@ -544,7 +549,12 @@ class SystemOneVerifier(HttpVerifier):
                 return self._unread(
                     f'no level probabilities in answers.{QUESTION_ID}'
                 )
-            return {'p': 1.0 - level, 'level': level, 'detail': None}
+            return {
+                'p': 1.0 - level,
+                'level': level,
+                'detail': None,
+                'levels': level_shares(probabilities),
+            }
         p = (
             probabilities.get('accept')
             if isinstance(probabilities, dict)
