@@ -1,0 +1,5 @@
+{"id": "ex-mul", "prompt": "What is 17*23? Reply with the number only.", "answer": "391", "grader": "number"}
+{"id": "ex-capital", "prompt": "What is the capital of Australia? Answer in one word.", "answer": "Canberra", "grader": "contains"}
+{"id": "ex-regex", "prompt": "Name the chemical symbol for sodium. Reply with the symbol only.", "answer": "^\\s*Na\\s*\\.?\\s*$", "grader": "regex"}
+{"id": "ex-cmd", "prompt": "Write a Python one-liner that prints the sum of 1..100. Reply with the code only, no code fences.", "check_cmd": "python3 -c \"$(cat)\" | grep -qx 5050"}
+{"id": "ex-llm", "prompt": "In one sentence, why does ice float on water?", "answer": "Ice is less dense than liquid water (hydrogen bonds hold it in an open lattice).", "grader": "llm"}

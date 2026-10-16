@@ -1,0 +1,10 @@
+[
+  {"name": "cheap", "model": "haiku", "args": ["--setting-sources", "project,local"]},
+  {"name": "strong", "model": "opus", "args": ["--setting-sources", "project,local"]},
+  {"name": "A_davi", "model": "sonnet",
+   "args": ["--plugin-dir", "plugins/davi-route", "--setting-sources", "project,local"],
+   "env": {"DAVI_ROUTE_ROUTE_ENABLED": "true", "DAVI_ROUTE_ROUTE_JUDGE": "davi", "DAVI_ROUTE_LOG_FILE": "runs/A_davi.hooks.jsonl"}},
+  {"name": "B_davi", "model": "haiku",
+   "args": ["--plugin-dir", "plugins/davi-route", "--setting-sources", "project,local"],
+   "env": {"DAVI_ROUTE_STOP_VERIFY_ENABLED": "true", "DAVI_ROUTE_STOP_JUDGE": "davi", "DAVI_ROUTE_LOG_FILE": "runs/B_davi.hooks.jsonl"}}
+]
