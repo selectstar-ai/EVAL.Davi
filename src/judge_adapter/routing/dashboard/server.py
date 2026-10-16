@@ -31,7 +31,7 @@ STATIC_FILES = {
     'index.html': 'text/html; charset=utf-8',
     'app.js': 'text/javascript; charset=utf-8',
     'style.css': 'text/css; charset=utf-8',
-    'figure.html': 'text/html; charset=utf-8',
+    'flow.js': 'text/javascript; charset=utf-8',
 }
 MAX_BODY_BYTES = 64_000
 MAX_KEPT_RUNS = 40

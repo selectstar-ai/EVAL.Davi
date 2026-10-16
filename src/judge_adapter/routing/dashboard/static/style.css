@@ -253,60 +253,6 @@ textarea {
 }
 .chip.live { background: var(--bad-bg); color: var(--bad); }
 
-.steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
-  counter-reset: step;
-}
-
-.steps li {
-  position: relative;
-  padding: 10px 10px 10px 40px;
-  border-radius: 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  color: var(--faint);
-  font-size: 13px;
-  counter-increment: step;
-}
-
-.steps li::before {
-  content: counter(step);
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--surface-2);
-  font-weight: 700;
-  font-size: 12px;
-}
-
-.steps li.done { color: var(--text); }
-.steps li.done::before { content: "✓"; background: var(--good); color: #fff; }
-.steps li.current {
-  color: var(--text);
-  border-color: var(--accent);
-  font-weight: 600;
-}
-.steps li.current::before {
-  background: var(--accent);
-  color: var(--accent-text);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent); }
-}
-
 .gauge-head {
   display: flex;
   justify-content: space-between;
@@ -518,7 +464,6 @@ textarea {
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar section { position: static; max-height: none; }
-  .steps { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 720px) {
@@ -610,11 +555,92 @@ textarea {
   .timing-total { text-align: left; }
 }
 
-.figure-frame {
-  display: block;
-  width: 100%;
-  height: 460px;
-  border: 0;
-  background: transparent;
-  color-scheme: normal;
+
+/* --- data-flow view ------------------------------------------------------ */
+.flow-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.flow-title { display: flex; align-items: center; gap: 10px; }
+.flow-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.flow-panel { min-width: 0; }
+.flow-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.flow-head h3 { font-size: 14px; }
+.flow-meta { color: var(--muted); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.flow-routed .flow-meta { color: var(--accent); }
+.flow-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.flow-caption {
+  margin: 0;
+  min-height: 3.2em;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.flow-harness { fill: var(--surface-2); fill-opacity: 0.45; stroke: var(--border); stroke-width: 1.2; }
+.flow-harness-label { fill: var(--text); font-size: 13px; font-weight: 700; }
+.flow-harness-tag, .flow-ext-tag { fill: var(--faint); font-size: 9.5px; letter-spacing: 0.08em; }
+.flow-ext-status { fill: var(--muted); font-size: 11px; font-weight: 600; }
+.flow-ext-none { fill: var(--faint); font-size: 12px; }
+
+.flow-node { transition: opacity 0.35s ease; }
+.flow-node[data-state="hidden"] { opacity: 0; }
+.flow-node[data-state="waiting"] { opacity: 0.45; }
+.flow-body { fill: var(--surface); stroke: var(--border); stroke-width: 1.2; transition: stroke 0.3s, fill 0.3s; }
+.fn-title { font-size: 13px; font-weight: 700; fill: var(--text); text-anchor: middle; }
+.fn-sub { font-size: 10.5px; fill: var(--muted); text-anchor: middle; }
+.flow-node[data-state="active"] .flow-body { stroke: var(--text); stroke-width: 1.8; }
+.flow-node[data-state="done"] .flow-body { stroke: var(--muted); }
+.flow-node[data-state="wrong"] .flow-body { stroke: var(--bad); fill: var(--bad-bg); }
+.flow-final[data-state="done"] .flow-body { stroke: var(--good); fill: var(--good-bg); stroke-width: 1.6; }
+.flow-davi .flow-body { stroke: var(--accent); stroke-width: 1.6; fill: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.flow-davi .fn-title { fill: var(--accent); }
+.flow-davi[data-state="active"] .flow-body { fill: color-mix(in srgb, var(--accent) 24%, var(--surface)); animation: flow-glow 1s ease-in-out infinite; }
+.flow-hook .flow-body { stroke-dasharray: 4 3; }
+.flow-routed .flow-hook[data-state="active"] .flow-body,
+.flow-routed .flow-hook[data-state="done"] .flow-body { stroke: var(--accent); stroke-dasharray: none; }
+.flow-sub[data-model="haiku"] .flow-body { stroke: var(--haiku); fill: var(--haiku-bg); }
+.flow-sub[data-model="sonnet"] .flow-body { stroke: var(--sonnet); fill: var(--sonnet-bg); }
+.flow-sub[data-model="opus"] .flow-body { stroke: var(--opus); fill: var(--opus-bg); }
+.flow-sub[data-model="haiku"] .fn-title { fill: var(--haiku); }
+.flow-sub[data-model="sonnet"] .fn-title { fill: var(--sonnet); }
+.flow-sub[data-model="opus"] .fn-title { fill: var(--opus); }
+.flow-sub[data-state="active"] .flow-body { stroke-width: 2.2; animation: flow-glow 1.2s ease-in-out infinite; }
+.flow-tools { font-size: 10.5px; fill: var(--muted); }
+
+.flow-edge { fill: none; stroke: var(--border); stroke-width: 1.4; transition: stroke 0.3s, opacity 0.3s; }
+.flow-edge[data-state="hidden"] { opacity: 0; }
+.flow-edge[data-state="idle"] { stroke-dasharray: 3 4; opacity: 0.8; }
+.flow-edge[data-state="active"] { stroke: var(--text); stroke-dasharray: 5 5; animation: flow-dash 0.6s linear infinite; }
+.flow-edge[data-state="done"] { stroke: var(--muted); }
+.flow-routed .flow-edge[data-state="active"] { stroke: var(--accent); }
+.flow-packet { fill: var(--text); filter: drop-shadow(0 0 4px var(--text)); }
+.flow-routed .flow-packet { fill: var(--accent); filter: drop-shadow(0 0 5px var(--accent)); }
+.flow-packet[data-model="haiku"] { fill: var(--haiku); filter: drop-shadow(0 0 5px var(--haiku)); }
+.flow-packet[data-model="sonnet"] { fill: var(--sonnet); filter: drop-shadow(0 0 5px var(--sonnet)); }
+.flow-packet[data-model="opus"] { fill: var(--opus); filter: drop-shadow(0 0 5px var(--opus)); }
+
+@keyframes flow-dash { to { stroke-dashoffset: -10; } }
+@keyframes flow-glow { 50% { stroke-opacity: 0.45; } }
+
+@media (max-width: 900px) {
+  .flow-panels { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-edge[data-state="active"], .flow-davi[data-state="active"] .flow-body,
+  .flow-sub[data-state="active"] .flow-body { animation: none; }
 }

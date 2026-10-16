@@ -18,32 +18,7 @@ const app = {
 
 const $ = (id) => document.getElementById(id);
 
-// the gauge-block bench in the timing card (static/figure.html)
-const figure = {
-  ready: false,
-  queue: [],
-  post(message) {
-    if (!this.ready) {
-      this.queue.push(message);
-      return;
-    }
-    const frame = $('figure-frame');
-    if (frame && frame.contentWindow) frame.contentWindow.postMessage(message, location.origin);
-  },
-  open() {
-    this.ready = true;
-    const waiting = this.queue.splice(0);
-    for (const message of waiting) this.post(message);
-  },
-};
-
-window.addEventListener('message', (event) => {
-  if (event.origin !== location.origin) return;
-  const data = event.data || {};
-  if (data.type !== 'figure-size') return;
-  $('figure-frame').style.height = `${data.height}px`;
-  if (!figure.ready) figure.open();
-});
+const flow = new FlowView($('flow-panels'), $('flow-caption'), $('flow-footer'));
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -218,14 +193,6 @@ function watch(runId) {
 }
 
 // --- drawing one run --------------------------------------------------------
-function setStep(step) {
-  for (const item of document.querySelectorAll('#steps li')) {
-    const n = Number(item.dataset.step);
-    item.classList.toggle('done', n < step);
-    item.classList.toggle('current', n === step);
-  }
-}
-
 function resetRun(data) {
   const run = app.run;
   run.mode = data.mode;
@@ -236,8 +203,6 @@ function resetRun(data) {
   $('banner').hidden = true;
   $('timing').hidden = false;
   $('timing-rows').replaceChildren();
-  figure.queue = figure.queue.filter((message) => message.type === 'theme');
-  figure.post({ type: 'reset' });
   $('timing-callout').textContent = '';
   $('event-log').textContent = '';
   $('usage').replaceChildren();
@@ -251,7 +216,7 @@ function resetRun(data) {
   drawGauge(data.tiers);
   for (const arm of data.arms) drawLane(arm);
   drawJudges(data.judges, data.tiers);
-  setStep(2);
+  flow.reset(data);
 }
 
 function drawGauge(tiers) {
@@ -348,6 +313,7 @@ function onJudge(data) {
 }
 
 function onRouting(data) {
+  flow.routing(data);
   const lane = app.run.lanes[data.arm];
   if (lane) {
     lane.sub = modelKey(data.model_set || data.model_requested) || lane.sub;
@@ -359,7 +325,6 @@ function onRouting(data) {
         seconds: data.seconds,
         judge: data.arm === 'routed' && typeof data.latency_s === 'number' ? data.latency_s : 0,
       };
-      postRouting(data.arm, lane);
     }
   }
   if (data.arm === 'opus') {
@@ -386,19 +351,15 @@ function onRouting(data) {
   lane.node.querySelector('.fact-judge').textContent =
     typeof data.latency_s === 'number' ? judgeSeconds(data.latency_s) : '실패';
   setLaneStatus('routed', `${model}로 풀이 중`, true);
-  setStep(4);
 }
 
 function onSubagent(data) {
+  flow.subagent(data);
   const lane = app.run.lanes[data.arm];
   if (!lane) return;
   const node = lane.node;
   if (!lane.timing.post) {
     lane.timing.post = { ts: data.ts, t: app.run.lastT, ms: data.subagent_ms };
-    const at = relTime(lane.timing, data.ts, app.run.lastT);
-    if (at != null) {
-      figure.post({ type: 'stage', lane: data.arm, stage: 'wrapup', at, rate: app.run.speed || 1 });
-    }
   }
   if (data.resolved_model) {
     node.querySelector('.fact-model').textContent = `${data.resolved_model} ✓`;
@@ -420,7 +381,7 @@ function onSessionStarted(data) {
   lane.main = modelKey(data.main_model) || data.main_model;
   lane.timing.startedAt = data.started_at;
   lane.timing.t0 = app.run.lastT;
-  figure.post({ type: 'stage', lane: data.arm, stage: 'prep', at: 0, rate: app.run.speed || 1 });
+  flow.sessionStarted(data);
   setFlow(data.arm);
   setLaneStatus(data.arm, '질문을 읽고 서브에이전트에게 맡기는 중', true);
 }
@@ -447,13 +408,12 @@ function onSessionDone(data) {
   drawUsage(data);
   lane.timing.wall = data.wall_s;
   drawTiming();
-  postFinished(data.arm, lane);
+  flow.sessionDone(data);
   if (!lane.subTokens && lane.sub && lane.sub !== lane.main) {
     const entry = Object.entries(data.model_usage || {})
       .find(([model]) => modelKey(model) === lane.sub);
     if (entry) node.querySelector('.fact-sub-tokens').textContent = tokens(entry[1].outputTokens);
   }
-  if (Object.values(app.run.lanes).every((item) => item.done)) setStep(5);
 }
 
 function drawUsage(data) {
@@ -478,44 +438,6 @@ function drawUsage(data) {
 }
 
 // --- where the time went --------------------------------------------------
-function relTime(tm, ts, t) {
-  if (typeof ts === 'number' && typeof tm.startedAt === 'number') return ts - tm.startedAt;
-  return typeof t === 'number' ? t - (tm.t0 || 0) : null;
-}
-
-function postRouting(key, lane) {
-  const routing = lane.timing.routing;
-  const hookTime = typeof routing.seconds === 'number' ? routing.seconds : routing.judge;
-  const start = typeof routing.ts === 'number'
-    ? relTime(lane.timing, routing.ts, null)
-    : relTime(lane.timing, null, routing.t) - hookTime;
-  if (start == null) return;
-  const rate = app.run.speed || 1;
-  const begin = Math.max(0, start);
-  if (routing.judge > 0) {
-    figure.post({ type: 'stage', lane: key, stage: 'judge', at: begin, rate });
-  }
-  figure.post({ type: 'stage', lane: key, stage: 'handoff', at: begin + routing.judge, rate });
-  figure.post({
-    type: 'stage', lane: key, stage: 'subagent', at: begin + hookTime, model: lane.sub, rate,
-  });
-}
-
-function postFinished(key, lane) {
-  const line = timeline(lane);
-  if (!line || line.noAgent) return;
-  const run = {
-    prep: line.parts.prep,
-    judge: line.parts.judge,
-    handoff: line.parts.pass,
-    subagent: line.parts.sub,
-    wrapup: line.parts.wrap,
-    model: lane.sub,
-  };
-  figure.post({ type: 'set', lane: key, run });
-  figure.post({ type: 'done', lane: key, at: line.total });
-}
-
 function timeline(lane) {
   const tm = lane.timing;
   if (typeof tm.wall !== 'number') return null;
@@ -650,7 +572,7 @@ function onSummary(summary) {
         (summary.routed_resolved_model ? ` · 실제 실행: ${summary.routed_resolved_model}` : ''),
     }));
   banner.hidden = false;
-  setStep(6);
+  flow.summary(summary, [text.head, text.cost].filter(Boolean).join(', '));
   addHistory(summary);
 }
 
