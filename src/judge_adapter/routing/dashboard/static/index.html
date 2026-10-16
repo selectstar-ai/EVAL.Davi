@@ -4,30 +4,41 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Davi 라우팅 라이브</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@400;600&display=swap">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <span class="logo" aria-hidden="true">D</span>
-      <div>
-        <h1>Davi 라우팅 라이브</h1>
-        <p class="tagline">쉬운 일은 가벼운 모델로, 어려운 일만 고성능 모델로</p>
-      </div>
-    </div>
+    <a class="brand" href="/" aria-label="Davi Route">
+      <svg class="mark" viewBox="0 0 34 16" aria-hidden="true">
+        <path d="M1 8H12" /><circle cx="17" cy="8" r="5" /><path d="M22 8H33" />
+      </svg>
+      <span class="wordmark">Davi Route</span>
+    </a>
     <nav class="tabs" role="tablist">
       <button class="tab active" data-mode="live" role="tab">실시간 실행</button>
       <button class="tab" data-mode="replay" role="tab">녹화 재생</button>
     </nav>
     <div class="tally" id="tally" hidden>
-      <span class="tally-label">이번 시연 누적</span>
+      <span class="tally-label">이번 시연 누적 절감</span>
       <span class="tally-value" id="tally-value"></span>
     </div>
   </header>
 
   <div class="layout">
-    <aside class="sidebar">
-      <section id="live-panel">
+    <main class="column">
+      <section class="intro" id="intro">
+        <p class="eyebrow">DAVI ROUTE · LIVE DEMO</p>
+        <h1 class="headline">Claude Code는 그대로 두고,<br>서브에이전트의 모델만 밖에서 고릅니다.</h1>
+        <p class="lede">같은 질문을 Claude Code 두 개에 동시에 보냅니다. 한쪽은 모든 서브에이전트가 opus,
+          다른 쪽은 Davi가 작업마다 haiku · sonnet · opus 중 하나를 고릅니다. 메인 에이전트는 양쪽 모두 같습니다.</p>
+        <p class="stats"><span>판정 약 0.15초</span><span>Claude Code 수정 없음</span><span>훅 하나로 개입</span></p>
+      </section>
+
+      <section class="picker">
+        <section id="live-panel">
         <h2>질문 고르기</h2>
         <p class="hint" id="live-status"></p>
         <ul class="task-list" id="task-list"></ul>
@@ -37,28 +48,14 @@
         <button class="primary" id="run-button" disabled>두 세션 동시에 실행</button>
         <p class="fine">실행하면 Claude Code 두 개가 같은 질문을 동시에 풉니다.
           실제 비용이 발생합니다.</p>
-      </section>
-      <section id="replay-panel" hidden>
+        </section>
+        <section id="replay-panel" hidden>
         <h2>녹화된 시연</h2>
         <div class="speeds" id="speeds" role="group" aria-label="재생 속도"></div>
         <ul class="task-list" id="recording-list"></ul>
         <p class="fine" id="replay-empty" hidden>아직 녹화가 없습니다. 실시간
           실행을 하면 자동으로 녹화됩니다.</p>
-      </section>
-    </aside>
-
-    <main class="stage">
-      <section class="intro" id="intro">
-        <h2>무엇을 보여주나요?</h2>
-        <ol class="intro-steps">
-          <li><strong>같은 질문</strong>을 Claude Code 두 개에 동시에 보냅니다.</li>
-          <li>왼쪽은 <strong>Davi</strong>가 먼저 난이도를 보고 가벼운 모델(haiku),
-            중간 모델(sonnet), 고성능 모델(opus) 중 하나를 고릅니다.</li>
-          <li>오른쪽은 늘 <strong>고성능 모델(opus)</strong>만 씁니다.</li>
-          <li>두 쪽 모두 메인 에이전트는 같은 모델이고, 서브에이전트 모델만 다릅니다.</li>
-          <li>정답과 비용을 나란히 비교합니다.</li>
-        </ol>
-        <p class="hint">왼쪽에서 질문을 고르고 실행해 보세요.</p>
+        </section>
       </section>
 
       <section class="run" id="run" hidden>
@@ -70,15 +67,6 @@
           <p class="question-text" id="question-text"></p>
         </div>
 
-        <section class="flow-card">
-          <div class="flow-title">
-            <h2>같은 작업, 다른 모델 배정</h2>
-            <span class="chip">DAVI ROUTE · tiers</span>
-          </div>
-          <div class="flow-panels" id="flow-panels"></div>
-          <p class="flow-caption" id="flow-caption"></p>
-          <p class="fine" id="flow-footer"></p>
-        </section>
 
         <div class="gauge-card">
           <div class="gauge-head">
@@ -144,6 +132,15 @@
         </table>
       </section>
     </main>
+
+    <aside class="stage">
+      <section class="flow-card">
+        <p class="eyebrow">01 · 같은 작업, 다른 모델 배정</p>
+        <div class="flow-panels" id="flow-panels"></div>
+        <p class="flow-caption" id="flow-caption">질문을 고르고 실행하면, 두 Claude Code 안에서 일어나는 일을 여기서 실시간으로 봅니다.</p>
+        <p class="flow-footer" id="flow-footer"></p>
+      </section>
+    </aside>
   </div>
 
   <template id="lane-template">

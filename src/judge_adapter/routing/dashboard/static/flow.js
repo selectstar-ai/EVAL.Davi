@@ -7,20 +7,25 @@
 // to Davi, an external decision model, and brings the model choice back.
 
 const FLOW = {
-  width: 520,
-  height: 566,
-  harness: { x: 12, y: 112, w: 496, h: 444 },
-  question: 146,
-  main: 214,
-  agents: 282,
-  hook: 348,
-  subs: 416,
-  collect: 488,
-  final: 534,
-  davi: { x: 260, y: 56, w: 212, h: 46 },
-  spread: [92, 428],
+  width: 760,
+  height: 238,
+  harness: { x: 6, y: 30, w: 600, h: 202 },
+  top: 104,
+  bottom: 188,
+  question: 84,
+  main: 230,
+  agents: 372,
+  hook: 512,
+  subs: [440, 584],
+  collect: 346,
+  final: 160,
+  davi: { x: 692, y: 104, w: 128, h: 52 },
 };
 const SVG_NS = 'http://www.w3.org/2000/svg';
+const IDLE_ARMS = [
+  { key: 'opus', label: '항상 opus' },
+  { key: 'routed', label: 'Davi 라우팅' },
+];
 const MODEL_NAMES = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus' };
 
 function svgNode(tag, attrs = {}, text) {
@@ -104,10 +109,19 @@ class FlowNode {
   }
 }
 
+const SIDES = {
+  left: (node) => [[node.x - node.w / 2, node.y], [-1, 0]],
+  right: (node) => [[node.x + node.w / 2, node.y], [1, 0]],
+  top: (node) => [[node.x, node.y - node.h / 2], [0, -1]],
+  bottom: (node) => [[node.x, node.y + node.h / 2], [0, 1]],
+};
+
 class FlowEdge {
-  constructor(layer, from, to, { route = null } = {}) {
+  constructor(layer, from, to, { out = 'right', into = 'left', route = null } = {}) {
     this.from = from;
     this.to = to;
+    this.out = out;
+    this.into = into;
     this.route = route;
     this.path = svgNode('path', { class: 'flow-edge', 'data-state': 'hidden' });
     layer.append(this.path);
@@ -119,10 +133,13 @@ class FlowEdge {
       this.path.setAttribute('d', this.route());
       return;
     }
-    const [x1, y1] = this.from.bottom;
-    const [x2, y2] = this.to.top;
-    const mid = (y1 + y2) / 2;
-    this.path.setAttribute('d', `M${x1} ${y1} C${x1} ${mid} ${x2} ${mid} ${x2} ${y2}`);
+    const [[x1, y1], [dx1, dy1]] = SIDES[this.out](this.from);
+    const [[x2, y2], [dx2, dy2]] = SIDES[this.into](this.to);
+    const reach = Math.max(16, Math.hypot(x2 - x1, y2 - y1) * 0.45);
+    this.path.setAttribute(
+      'd',
+      `M${x1} ${y1} C${x1 + dx1 * reach} ${y1 + dy1 * reach} ${x2 + dx2 * reach} ${y2 + dy2 * reach} ${x2} ${y2}`,
+    );
   }
 
   state(value) {
@@ -160,48 +177,49 @@ class FlowPanel {
     const svg = this.svg;
     svg.replaceChildren();
     const box = FLOW.harness;
+    const D = FLOW.davi;
     svg.append(
-      svgNode('rect', { class: 'flow-harness', x: box.x, y: box.y, width: box.w, height: box.h, rx: 14 }),
-      svgNode('text', { class: 'flow-harness-label', x: box.x + 16, y: box.y + 22 }, 'Claude Code'),
-      svgNode('text', { class: 'flow-harness-tag', x: box.x + box.w - 32, y: box.y + 22, 'text-anchor': 'end' }, 'AGENT HARNESS'),
+      svgNode('rect', { class: 'flow-harness', x: box.x, y: box.y, width: box.w, height: box.h, rx: 12 }),
+      svgNode('text', { class: 'flow-harness-label', x: box.x + 16, y: box.y + 20 }, 'CLAUDE CODE'),
+      svgNode('text', { class: 'flow-harness-tag', x: box.x + box.w - 14, y: box.y + 20, 'text-anchor': 'end' }, 'AGENT HARNESS'),
     );
+    if (this.routed) {
+      svg.append(svgNode('text', { class: 'flow-ext-tag', x: D.x, y: D.y - D.h / 2 - 12, 'text-anchor': 'middle' }, 'EXTERNAL PLUGIN'));
+      this.daviStatus = svgNode('text', { class: 'flow-ext-status', x: D.x, y: D.y + D.h / 2 + 18, 'text-anchor': 'middle' }, '연결됨 · 호출 대기');
+      this.daviDetail = svgNode('text', { class: 'flow-ext-status', x: D.x, y: D.y + D.h / 2 + 33, 'text-anchor': 'middle' }, '');
+      svg.append(this.daviStatus, this.daviDetail);
+    } else {
+      svg.append(
+        svgNode('rect', { class: 'flow-ext-empty', x: D.x - D.w / 2, y: D.y - D.h / 2, width: D.w, height: D.h, rx: 6 }),
+        svgNode('text', { class: 'flow-ext-none', x: D.x, y: D.y + 4, 'text-anchor': 'middle' }, '외부 플러그인 없음'),
+      );
+    }
     this.edgeLayer = svgNode('g');
     this.nodeLayer = svgNode('g');
     this.packetLayer = svgNode('g');
     svg.append(this.edgeLayer, this.nodeLayer, this.packetLayer);
 
-    const D = FLOW.davi;
     if (this.routed) {
-      svg.insertBefore(svgNode('text', { class: 'flow-ext-tag', x: D.x, y: 18, 'text-anchor': 'middle' }, 'SELECTSTAR · EXTERNAL PLUGIN'), this.edgeLayer);
-      this.davi = new FlowNode(this.nodeLayer, { w: D.w, h: D.h, title: 'DAVI · 외부 의사결정 모델', sub: 'davi-route 플러그인', kind: 'flow-davi' }).place(D.x, D.y).state('idle');
-      this.daviStatus = svgNode('text', { class: 'flow-ext-status', x: D.x, y: D.y + D.h / 2 + 16, 'text-anchor': 'middle' }, '연결됨 · 호출 대기');
-      svg.insertBefore(this.daviStatus, this.edgeLayer);
-    } else {
-      svg.insertBefore(svgNode('text', { class: 'flow-ext-none', x: D.x, y: D.y + 4, 'text-anchor': 'middle' }, '외부 플러그인 없음'), this.edgeLayer);
+      this.davi = new FlowNode(this.nodeLayer, { w: D.w, h: D.h, title: 'DAVI', sub: '외부 의사결정 모델', kind: 'flow-davi' }).place(D.x, D.y).state('idle');
     }
-
-    this.question = new FlowNode(this.nodeLayer, { w: 176, h: 40, title: '사용자 질문', sub: '' }).place(260, FLOW.question);
-    this.main = new FlowNode(this.nodeLayer, { shape: 'ellipse', w: 168, h: 42, title: '메인 에이전트', sub: '작업 계획', kind: 'flow-main' }).place(260, FLOW.main);
-    this.hook = new FlowNode(this.nodeLayer, {
-      w: 210, h: 38,
-      title: this.routed ? 'PreToolUse · 모델 지정' : 'PreToolUse · 모델 고정',
-      sub: this.routed ? 'Agent.model을 Davi 판정으로' : '모든 Agent 호출 → opus',
+    const ghost = (node) => node.state('ghost');
+    this.question = new FlowNode(this.nodeLayer, { w: 132, h: 40, title: '사용자 질문', sub: '' }).place(FLOW.question, FLOW.top);
+    this.main = ghost(new FlowNode(this.nodeLayer, { shape: 'ellipse', w: 128, h: 44, title: '메인 에이전트', sub: '작업 계획', kind: 'flow-main' }).place(FLOW.main, FLOW.top));
+    this.hook = ghost(new FlowNode(this.nodeLayer, {
+      w: 120, h: 42,
+      title: 'PreToolUse',
+      sub: this.routed ? '모델 지정' : '모델 고정 · opus',
       kind: 'flow-hook',
-    }).place(260, FLOW.hook);
-    this.collect = new FlowNode(this.nodeLayer, { shape: 'ellipse', w: 184, h: 42, title: '메인 에이전트', sub: '결과 취합', kind: 'flow-main' }).place(260, FLOW.collect);
-    this.final = new FlowNode(this.nodeLayer, { w: 196, h: 38, title: '최종 답변', sub: '', kind: 'flow-final' }).place(260, FLOW.final);
-    this.edgeQM = new FlowEdge(this.edgeLayer, this.question, this.main);
-    this.edgeCF = new FlowEdge(this.edgeLayer, this.collect, this.final);
+    }).place(FLOW.hook, FLOW.top));
+    this.collect = ghost(new FlowNode(this.nodeLayer, { shape: 'ellipse', w: 140, h: 42, title: '메인 에이전트', sub: '결과 취합', kind: 'flow-main' }).place(FLOW.collect, FLOW.bottom));
+    this.final = ghost(new FlowNode(this.nodeLayer, { w: 156, h: 40, title: '최종 답변', sub: '', kind: 'flow-final' }).place(FLOW.final, FLOW.bottom));
+    this.edgeQM = new FlowEdge(this.edgeLayer, this.question, this.main).state('ghost');
+    this.edgeCF = new FlowEdge(this.edgeLayer, this.collect, this.final, { out: 'left', into: 'right' }).state('ghost');
     if (this.routed) {
       const hook = this.hook;
       this.edgeDavi = new FlowEdge(this.edgeLayer, hook, this.davi, {
-        route: () => {
-          const [x, y] = hook.right;
-          const right = FLOW.harness.x + FLOW.harness.w - 18;
-          return `M${x} ${y} H${right - 10} Q${right} ${y} ${right} ${y - 10} V${FLOW.davi.y + 10} Q${right} ${FLOW.davi.y} ${right - 10} ${FLOW.davi.y} H${FLOW.davi.x + FLOW.davi.w / 2}`;
-        },
-      });
-      this.edgeDavi.state('idle');
+        route: () => `M${hook.x + hook.w / 2} ${hook.y} H${FLOW.davi.x - FLOW.davi.w / 2}`,
+      }).state('idle');
     }
     this.calls = [];
     this.chain = Promise.resolve();
@@ -213,7 +231,7 @@ class FlowPanel {
 
   reset(task) {
     this.build();
-    this.question.text('사용자 질문', (task.title || '').slice(0, 18)).state('active');
+    this.question.text('사용자 질문', (task.title || '').slice(0, 14)).state('active');
   }
 
   queue(step) {
@@ -251,30 +269,36 @@ class FlowPanel {
 
   layoutCalls() {
     const count = this.calls.length;
-    const [left, right] = FLOW.spread;
-    const width = count > 1 ? Math.min(124, (right - left) / count + 20) : 124;
+    const height = count === 1 ? 36 : count === 2 ? 30 : 24;
+    const gap = height + 6;
+    const [left, right] = FLOW.subs;
+    const width = count === 1 ? 118 : Math.max(52, (right - left) / count + 18);
     this.calls.forEach((call, index) => {
-      const x = count === 1 ? 260 : left + ((right - left) * index) / (count - 1);
-      call.agent.resize(width).place(x, FLOW.agents);
-      call.sub.resize(width).place(x, FLOW.subs);
+      const y = FLOW.top + (index - (count - 1) / 2) * gap;
+      call.agent.h = height;
+      call.agent.body.setAttribute('y', -height / 2);
+      call.agent.body.setAttribute('height', height);
+      call.agent.place(FLOW.agents, y);
+      const x = count === 1 ? FLOW.hook : left + ((right - left) * index) / (count - 1);
+      call.sub.resize(width).place(x, FLOW.bottom);
       call.tools.setAttribute('x', x);
-      call.tools.setAttribute('y', FLOW.subs + 34);
+      call.tools.setAttribute('y', FLOW.bottom + 32);
     });
     for (const call of this.calls) for (const edge of call.edges) edge.update();
   }
 
   addCall() {
     const index = this.calls.length + 1;
-    const agent = new FlowNode(this.nodeLayer, { w: 124, h: 36, title: `Agent 호출 ${index}`, sub: '메인이 만든 작업' }).state('hidden');
-    const sub = new FlowNode(this.nodeLayer, { shape: 'ellipse', w: 124, h: 42, title: '서브에이전트', sub: `${index}`, kind: 'flow-sub' }).state('hidden');
+    const agent = new FlowNode(this.nodeLayer, { w: 118, h: 36, title: `Agent 호출 ${index}`, sub: '' }).state('hidden');
+    const sub = new FlowNode(this.nodeLayer, { shape: 'ellipse', w: 118, h: 42, title: '서브에이전트', sub: `${index}`, kind: 'flow-sub' }).state('hidden');
     const tools = svgNode('text', { class: 'flow-tools', 'text-anchor': 'middle' }, '');
     this.nodeLayer.append(tools);
     const call = { index, agent, sub, tools, edges: [] };
     call.edges = [
       new FlowEdge(this.edgeLayer, this.main, agent),
       new FlowEdge(this.edgeLayer, agent, this.hook),
-      new FlowEdge(this.edgeLayer, this.hook, sub),
-      new FlowEdge(this.edgeLayer, sub, this.collect),
+      new FlowEdge(this.edgeLayer, this.hook, sub, { out: 'bottom', into: 'top' }),
+      new FlowEdge(this.edgeLayer, sub, this.collect, { out: 'left', into: 'right' }),
     ];
     this.calls.push(call);
     this.layoutCalls();
@@ -306,21 +330,24 @@ class FlowPanel {
       await this.travel(call.edges[1], 380);
       if (this.routed) {
         this.daviStatus.textContent = '과제 수신 · 외부 난이도 판정';
+        this.daviDetail.textContent = '';
         this.davi.state('active');
         this.edgeDavi.reverse = false;
         await this.travel(this.edgeDavi, 520);
-        const verdict = level == null
-          ? '판정 실패 → 기본 모델'
-          : `판정 ${secondsText(data.latency_s)} · 난이도 ${level.toFixed(2)} → ${MODEL_NAMES[model] || model}`;
-        this.daviStatus.textContent = verdict;
+        if (level == null) {
+          this.daviStatus.textContent = '판정 실패 → 기본 모델';
+        } else {
+          this.daviStatus.textContent = `판정 ${secondsText(data.latency_s)} · 난이도 ${level.toFixed(2)}`;
+          this.daviDetail.textContent = `→ ${MODEL_NAMES[model] || model} 배정`;
+        }
         this.edgeDavi.reverse = true;
         await this.travel(this.edgeDavi, 520, model);
         this.davi.state('done');
-        this.hook.text('PreToolUse · 모델 지정', `Agent.model = ${model || '-'}`);
+        this.hook.text('PreToolUse', `model = ${model || '-'}`);
       }
       this.hook.state('done');
       call.sub.model = model;
-      call.sub.text(MODEL_NAMES[model] || model || '서브에이전트', `서브에이전트 ${call.index} · 실행 중`).state('active');
+      call.sub.text(MODEL_NAMES[model] || model || '서브에이전트', '서브에이전트 · 실행 중').state('active');
       call.sub.started = performance.now();
       await this.travel(call.edges[2], 400, model);
     });
@@ -378,19 +405,24 @@ class FlowView {
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+    this.draw(IDLE_ARMS, null);
+  }
+
+  draw(arms, task) {
+    this.container.replaceChildren();
+    this.panels = {};
+    const order = ['opus', 'routed'];
+    for (const arm of [...arms].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))) {
+      const panel = new FlowPanel(this.container, arm, this);
+      if (task) panel.reset(task);
+      else panel.question.state('ghost');
+      this.panels[arm.key] = panel;
+    }
   }
 
   reset(data) {
     this.speed = data.speed || 1;
-    this.container.replaceChildren();
-    this.panels = {};
-    const order = ['opus', 'routed'];
-    const arms = [...data.arms].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
-    for (const arm of arms) {
-      const panel = new FlowPanel(this.container, arm, this);
-      panel.reset(data.task);
-      this.panels[arm.key] = panel;
-    }
+    this.draw(data.arms, data.task);
     this.say(`요청 · "${(data.task.question || '').split('\n')[0].slice(0, 80)}"`);
     this.footer.textContent = '비용과 시간은 이 실행의 실제 Claude Code 기록입니다.';
   }
