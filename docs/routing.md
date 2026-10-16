@@ -221,6 +221,9 @@ davi-route dashboard --tasks demo-candidates/klear_demo.tasks.jsonl --open
 - 화면에 나오는 것: 진행 단계, Davi 난이도 게이지와 기준선, "메인 → 서브에이전트" 모델, 실제 실행 모델(`resolvedModel`),
   Davi 판정 시간, 서브에이전트 실행 시간과 출력 토큰(훅 로그의 숫자만, 본문 없음), 걸린 시간,
   "시간은 어디에 쓰였나?" 막대(메인 준비 / Davi 판정 / 전달 / 서브에이전트 풀이 / 메인 마무리, 훅 로그 시각 기준),
+  같은 내용을 게이지 블록 작업대 그림으로 보여주는 애니메이션(`dashboard/static/figure.html`: 단계마다 소요 시간만큼 긴 블록,
+  Davi 판정은 0.15초 두께의 필러 게이지 한 장. 원본은 `dashboard/figure/`, `node dashboard/figure/build.mjs`로 다시 빌드,
+  그림 도구는 Anatomy 스킬의 kit을 `figure/vendor/`에 MIT 라이선스와 함께 포함),
   비용, 채점 결과, 비용 절감률, 같은 원래 질문에 대한 Davi / Jev / Claude 판정 비교, 이번 시연 누적 절감액.
 - **녹화 재생**: 실시간 실행은 모두 `dashboard-recordings/`에 저장되고(질문과 답이 들어 있어 git 제외), 같은 화면으로
   ×1 / ×2 / ×4 / ×8 재생합니다. 네트워크와 비용이 들지 않습니다. 시연 전에 미리 녹화하려면

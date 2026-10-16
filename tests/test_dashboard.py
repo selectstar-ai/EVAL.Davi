@@ -337,6 +337,8 @@ def test_server_state_page_and_static(server):
     status, text = request(server, '/')
     assert status == 200 and 'Davi 라우팅 라이브' in text
     assert request(server, '/static/app.js')[0] == 200
+    status, text = request(server, '/static/figure.html')
+    assert status == 200 and 'figure-size' in text
     assert request(server, '/static/../server.py')[0] == 404
     assert request(server, '/api/nothing')[0] == 404
 
