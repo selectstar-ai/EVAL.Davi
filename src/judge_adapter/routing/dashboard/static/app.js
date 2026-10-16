@@ -46,6 +46,10 @@ function seconds(value) {
   return typeof value === 'number' ? `${value.toFixed(1)}초` : '-';
 }
 
+function judgeSeconds(value) {
+  return typeof value === 'number' ? `${value.toFixed(2)}초` : '-';
+}
+
 function percent(value) {
   return typeof value === 'number' ? `${Math.round(value * 100)}%` : '-';
 }
@@ -176,7 +180,10 @@ async function startReplay(recordingId) {
 
 function watch(runId) {
   if (app.source) app.source.close();
-  app.run = { id: runId, done: false, speed: 1, lanes: {}, judges: {}, events: [] };
+  app.run = {
+    id: runId, done: false, speed: 1, lanes: {}, judges: {}, events: [],
+    judgeTimes: {}, lastT: 0,
+  };
   updateRunButton();
   const source = new EventSource(`/api/runs/${runId}/events`);
   app.source = source;
@@ -200,6 +207,9 @@ function resetRun(data) {
   $('intro').hidden = true;
   $('run').hidden = false;
   $('banner').hidden = true;
+  $('timing').hidden = true;
+  $('timing-rows').replaceChildren();
+  $('timing-callout').textContent = '';
   $('event-log').textContent = '';
   $('usage').replaceChildren();
 
@@ -241,7 +251,10 @@ function drawLane(arm) {
   lane.querySelector('.lane-title').textContent = arm.label;
   lane.querySelector('.lane-sub').textContent = (ARM_TEXT[arm.key] || {}).sub || '';
   lane.querySelector('.fact-judge').textContent = (ARM_TEXT[arm.key] || {}).judge || '-';
-  app.run.lanes[arm.key] = { node: lane, started: null, done: false, main: null, sub: null };
+  app.run.lanes[arm.key] = {
+    node: lane, label: arm.label, started: null, done: false, main: null, sub: null,
+    timing: {},
+  };
   setLaneStatus(arm.key, '시작 대기', false);
 }
 
@@ -301,7 +314,8 @@ function onJudge(data) {
   } else {
     row.pick.textContent = data.outcome === 'local_config' ? '사용 불가 (키 없음)' : '판정 실패';
   }
-  row.time.textContent = seconds(data.latency_s);
+  row.time.textContent = judgeSeconds(data.latency_s);
+  if (data.ok) app.run.judgeTimes[data.judge] = data.latency_s;
 }
 
 function onRouting(data) {
@@ -309,6 +323,14 @@ function onRouting(data) {
   if (lane) {
     lane.sub = modelKey(data.model_set || data.model_requested) || lane.sub;
     setFlow(data.arm);
+    if (!lane.timing.routing) {
+      lane.timing.routing = {
+        ts: data.ts,
+        t: app.run.lastT,
+        seconds: data.seconds,
+        judge: data.arm === 'routed' && typeof data.latency_s === 'number' ? data.latency_s : 0,
+      };
+    }
   }
   if (data.arm === 'opus') {
     setBadge('opus', data.model_set || 'opus');
@@ -325,14 +347,14 @@ function onRouting(data) {
     $('gauge').className = 'gauge decided';
     if (data.tier) $(`zone-${data.tier}`).classList.add('picked');
     $('gauge-verdict').textContent =
-      `${data.tier_label || ''} → ${model}로 배정 (판단 ${seconds(data.latency_s)})`;
+      `${data.tier_label || ''} → ${model}로 배정 (판단 ${judgeSeconds(data.latency_s)})`;
   } else {
     $('gauge').className = 'gauge';
     $('gauge-verdict').textContent = `판단 실패 → 기본값 ${model || '모델'} 사용`;
   }
   setBadge('routed', model);
   lane.node.querySelector('.fact-judge').textContent =
-    typeof data.latency_s === 'number' ? seconds(data.latency_s) : '실패';
+    typeof data.latency_s === 'number' ? judgeSeconds(data.latency_s) : '실패';
   setLaneStatus('routed', `${model}로 풀이 중`, true);
   setStep(4);
 }
@@ -341,6 +363,9 @@ function onSubagent(data) {
   const lane = app.run.lanes[data.arm];
   if (!lane) return;
   const node = lane.node;
+  if (!lane.timing.post) {
+    lane.timing.post = { ts: data.ts, t: app.run.lastT, ms: data.subagent_ms };
+  }
   if (data.resolved_model) {
     node.querySelector('.fact-model').textContent = `${data.resolved_model} ✓`;
   }
@@ -359,6 +384,8 @@ function onSessionStarted(data) {
   if (!lane) return;
   lane.started = performance.now();
   lane.main = modelKey(data.main_model) || data.main_model;
+  lane.timing.startedAt = data.started_at;
+  lane.timing.t0 = app.run.lastT;
   setFlow(data.arm);
   setLaneStatus(data.arm, '질문을 읽고 서브에이전트에게 맡기는 중', true);
 }
@@ -383,6 +410,8 @@ function onSessionDone(data) {
     setLaneStatus(data.arm, '완료', false);
   }
   drawUsage(data);
+  lane.timing.wall = data.wall_s;
+  drawTiming();
   if (!lane.subTokens && lane.sub && lane.sub !== lane.main) {
     const entry = Object.entries(data.model_usage || {})
       .find(([model]) => modelKey(model) === lane.sub);
@@ -410,6 +439,112 @@ function drawUsage(data) {
     $('usage').append(table);
   }
   table.querySelector('tbody').append(...rows);
+}
+
+// --- where the time went --------------------------------------------------
+function timeline(lane) {
+  const tm = lane.timing;
+  if (typeof tm.wall !== 'number') return null;
+  const rel = (ts, t) => {
+    if (typeof ts === 'number' && typeof tm.startedAt === 'number') return ts - tm.startedAt;
+    return typeof t === 'number' ? t - (tm.t0 || 0) : null;
+  };
+  const wall = tm.wall;
+  const routing = tm.routing;
+  if (!routing) return { total: wall, parts: { prep: wall }, judge: 0, noAgent: true };
+  const hookTime = typeof routing.seconds === 'number' ? routing.seconds : routing.judge;
+  // a log line without ts is written when the hook ends
+  const hookStart = Math.max(0, typeof routing.ts === 'number'
+    ? rel(routing.ts, null)
+    : rel(null, routing.t) - hookTime);
+  const hookEnd = hookStart + hookTime;
+  const post = tm.post;
+  const postAt = post ? rel(post.ts, post.t) : null;
+  let sub = 0;
+  if (post && typeof post.ms === 'number') sub = post.ms / 1000;
+  else if (postAt != null) sub = Math.max(0, postAt - hookEnd);
+  const handoff = postAt != null ? Math.max(0, postAt - sub - hookEnd) : 0;
+  const finished = postAt != null ? postAt : hookEnd + sub;
+  const parts = {
+    prep: hookStart,
+    judge: routing.judge,
+    pass: Math.max(0, hookTime - routing.judge) + handoff,
+    sub,
+    wrap: Math.max(0, wall - finished),
+  };
+  const total = Object.values(parts).reduce((a, b) => a + b, 0);
+  return { total, parts, judge: routing.judge, wall };
+}
+
+const SEGMENTS = [
+  ['prep', '메인 에이전트 준비'],
+  ['judge', 'Davi 판정'],
+  ['pass', '전달'],
+  ['sub', '서브에이전트 풀이'],
+  ['wrap', '메인 에이전트 마무리'],
+];
+
+function drawTiming() {
+  const lanes = Object.entries(app.run.lanes)
+    .map(([key, lane]) => [key, lane, timeline(lane)])
+    .filter(([, , line]) => line);
+  if (!lanes.length) return;
+  const scale = Math.max(...lanes.map(([, , line]) => line.total));
+  const rows = $('timing-rows');
+  rows.replaceChildren();
+  for (const [key, lane, line] of lanes) {
+    const bar = el('div', { class: 'timing-bar' });
+    bar.style.width = `${(line.total / scale) * 100}%`;
+    for (const [part, label] of SEGMENTS) {
+      const value = line.parts[part] || 0;
+      if (value <= 0) continue;
+      const seg = el('div', {
+        class: `seg seg-${part}`,
+        title: `${label} ${seconds(value)}`,
+      });
+      seg.style.width = `${(value / line.total) * 100}%`;
+      if (part === 'sub') seg.dataset.model = lane.sub || '';
+      if (part === 'judge') {
+        seg.append(el('span', { class: 'judge-flag', text: `Davi 판정 ${value.toFixed(2)}초` }));
+      } else if (value / scale > 0.09) {
+        seg.textContent = seconds(value);
+      }
+      bar.append(seg);
+    }
+    const name = el('div', { class: 'timing-name', text: lane.label },
+      el('small', { text: `메인 ${lane.main || '-'} → 서브 ${lane.sub || '-'}` }));
+    rows.append(el('div', { class: 'timing-row' + (line.judge > 0 ? ' has-flag' : '') },
+      name,
+      el('div', { class: 'timing-track' }, bar),
+      el('div', { class: 'timing-total', text: seconds(line.total) })));
+  }
+  $('timing').hidden = false;
+  drawTimingCallout(lanes);
+}
+
+function drawTimingCallout(lanes) {
+  const routed = lanes.find(([key]) => key === 'routed');
+  const box = $('timing-callout');
+  if (!routed || routed[2].noAgent) {
+    box.textContent = '';
+    return;
+  }
+  const line = routed[2];
+  const share = line.total ? (line.judge / line.total) * 100 : 0;
+  const rest = line.total - line.judge;
+  box.replaceChildren(
+    'Davi 판정은 ',
+    el('strong', { text: `${line.judge.toFixed(2)}초` }),
+    `로, 전체 ${seconds(line.total)}의 ${share < 1 ? share.toFixed(1) : Math.round(share)}%입니다. ` +
+      `나머지 ${seconds(rest)}는 메인 에이전트 준비 ${seconds(line.parts.prep)}, ` +
+      `서브에이전트(${routed[1].sub || '-'}) 풀이 ${seconds(line.parts.sub)}, ` +
+      `마무리 ${seconds(line.parts.wrap)} 등 Claude Code가 일하는 시간입니다.`);
+  const others = ['claude', 'jev']
+    .filter((name) => typeof app.run.judgeTimes[name] === 'number')
+    .map((name) => `${name === 'claude' ? 'Claude' : 'Jev'}는 ${judgeSeconds(app.run.judgeTimes[name])}`);
+  if (others.length) {
+    box.append(` 같은 판정에 ${others.join(', ')}가 걸렸습니다.`);
+  }
 }
 
 function bannerText(summary) {
@@ -490,6 +625,7 @@ function handle(event) {
   const run = app.run;
   if (!run) return;
   run.events.push(event);
+  run.lastT = event.t;
   $('event-log').textContent +=
     `${event.t.toFixed(1).padStart(6)}s  ${event.type}  ${JSON.stringify(event.data).slice(0, 220)}\n`;
   const data = event.data;

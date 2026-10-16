@@ -312,7 +312,7 @@ textarea {
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
-  margin-bottom: 18px;
+  margin-bottom: 40px;
 }
 
 .gauge-verdict { margin: 0; font-size: 16px; font-weight: 600; }
@@ -527,4 +527,85 @@ textarea {
   .lanes { grid-template-columns: 1fr; }
   .judge-row { grid-template-columns: 70px minmax(0, 1fr) 90px; }
   .judge-time { display: none; }
+}
+
+.timing-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.timing-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.timing-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; }
+.timing-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 3px;
+  vertical-align: -1px;
+}
+.timing-callout { margin: 0; font-size: 16px; line-height: 1.6; }
+.timing-callout strong { color: var(--accent); }
+.timing-rows { display: grid; gap: 18px; }
+.timing-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 70px; align-items: center; gap: 12px; }
+.timing-name { font-weight: 700; font-size: 13px; }
+.timing-name small { display: block; color: var(--faint); font-weight: 500; }
+.timing-total { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.timing-track { position: relative; height: 30px; border-radius: 8px; background: var(--surface-2); }
+.timing-bar { position: absolute; inset: 0 auto 0 0; display: flex; height: 100%; border-radius: 8px; overflow: visible; }
+.seg {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: width 0.8s ease-out;
+}
+.seg:first-child { border-radius: 8px 0 0 8px; }
+.seg:last-child { border-radius: 0 8px 8px 0; }
+.seg-prep { background: #8a93a3; }
+.seg-judge { background: #ff3d71; min-width: 3px; overflow: visible; }
+.seg-pass { background: #c3c9d4; }
+.seg-wrap { background: #b0b7c3; }
+.seg-sub { background: var(--accent); }
+.seg-sub[data-model="haiku"] { background: var(--haiku); }
+.seg-sub[data-model="sonnet"] { background: var(--sonnet); }
+.seg-sub[data-model="opus"] { background: var(--opus); }
+.judge-flag {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #ff3d71;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.judge-flag::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -4px;
+  border: 4px solid transparent;
+  border-top-color: #ff3d71;
+}
+.timing-row.has-flag { margin-top: 18px; }
+@media (max-width: 720px) {
+  .timing-row { grid-template-columns: 1fr; }
+  .timing-total { text-align: left; }
 }

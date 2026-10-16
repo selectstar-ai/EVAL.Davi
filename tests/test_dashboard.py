@@ -61,7 +61,13 @@ def fake_runner(seen):
         seen.append(env)
         routed = env.get('DAVI_ROUTE_ROUTE_MODE') == 'tiers'
         model = 'haiku' if routed else 'opus'
-        pre = {'kind': 'pre', 'status': 'ok', 'model_set': model}
+        pre = {
+            'kind': 'pre',
+            'status': 'ok',
+            'model_set': model,
+            'ts': 1000.5,
+            'seconds': 0.4,
+        }
         if routed:
             pre.update(
                 level=0.1,
@@ -208,6 +214,9 @@ def test_live_run_events_summary_and_recording(tmp_path):
     assert routed['tier_label'] == '가벼운 모델'
     subagent = next(e.data for e in events if e.type == 'subagent')
     assert subagent['subagent_ms'] == 4200
+    assert routed['ts'] == 1000.5 and routed['seconds'] == 0.4
+    started = next(e.data for e in events if e.type == 'session_started')
+    assert isinstance(started['started_at'], float)
     assert subagent['subagent_output_tokens'] == 321
     judges = {e.data['judge']: e.data for e in events if e.type == 'judge'}
     assert judges['davi']['model'] == 'haiku'  # fake: level = 1 - p

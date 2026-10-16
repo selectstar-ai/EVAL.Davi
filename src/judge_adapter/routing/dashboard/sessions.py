@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 
 from ..grading import grade
@@ -40,6 +41,7 @@ EXTRA_ARGS = (
 )
 MAX_RESULT_CHARS = 4000
 SUBAGENT_FIELDS = (
+    'ts',
     'resolved_model',
     'subagent_ms',
     'subagent_tokens',
@@ -159,6 +161,7 @@ class ClaudeSession:
                 'arm': self._arm.key,
                 'label': self._arm.label,
                 'main_model': self._config.main_model,
+                'started_at': time.time(),
             },
         )
         box = {}
@@ -217,6 +220,9 @@ class ClaudeSession:
             'outcome': record.get('outcome'),
             'latency_s': record.get('latency_s'),
             'detail': record.get('detail'),
+            # hook start (epoch) and the whole hook's time, judge included
+            'ts': record.get('ts'),
+            'seconds': record.get('seconds'),
         }
 
     def _summary(self, task, box):
