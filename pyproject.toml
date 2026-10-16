@@ -40,6 +40,7 @@ fastchat = [
     "tqdm",
 ]
 test = ["pytest>=7"]
+lint = ["ruff>=0.15"]
 
 [project.scripts]
 judge-adapter = "judge_adapter.cli:main"
@@ -67,6 +68,7 @@ include = [
     "/bin",
     "/.claude-plugin",
     "/README.md",
+    "/CLAUDE.md",
     "/docs",
     "/LICENSE",
     "/NOTICE",
@@ -75,3 +77,22 @@ include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# PEP 8 for the routing code (see CLAUDE.md); the older modules keep their style.
+[tool.ruff]
+line-length = 79
+target-version = "py39"
+include = [
+    "src/judge_adapter/routing/*.py",
+    "plugins/davi-route/hooks/*.py",
+    "tests/test_routing.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "N", "B", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["judge_adapter"]
+
+[tool.ruff.format]
+quote-style = "single"

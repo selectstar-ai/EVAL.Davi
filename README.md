@@ -1,232 +1,186 @@
-# judge-adapter
+# davi-route
 
-**Spend fewer input tokens on retrieved context: a choice model scores each search result, and only the results
-worth reading reach the agent.** Also a pairwise LLM-judge adapter with fixed options, retries 0 and run-wide limits.
+**Send each subagent task to the cheapest Claude model that can solve it.** Before a Claude Code subagent runs, a
+judge rates how hard the task is and the plugin picks **haiku**, **sonnet** or **opus** for that one call. Easy work
+stays cheap; hard work gets the strong model.
 
-[Docs](docs/) · [Plugin](docs/plugin.md) · [Verification](docs/verification.md) · [Routing (experimental)](docs/routing.md) · [한국어](docs/ko.md) ·
+[Routing docs (Korean)](docs/routing.md) · [Legacy filter plugin](docs/plugin.md) · [Reference](docs/reference.md) ·
 [GitHub](https://github.com/selectstar-ai/EVAL.Davi)
 
-## Installation
-
-The project's repository is [selectstar-ai/EVAL.Davi](https://github.com/selectstar-ai/EVAL.Davi); the Python
-distribution and import names (`judge-adapter`, `judge_adapter`) and the plugin name (`davi`) are unchanged.
-
-Python 3.9 or newer. Install from GitHub (this package is not on PyPI):
-
-```bash
-# core: depends only on httpx (no torch, no FastChat)
-pip install "judge-adapter @ git+https://github.com/selectstar-ai/EVAL.Davi"
-
-# optional FastChat binding: pulls FastChat at the pinned commit plus torch / transformers etc. (heavy)
-pip install "judge-adapter[fastchat] @ git+https://github.com/selectstar-ai/EVAL.Davi"
-```
-
-From a source checkout: `pip install .` (or `pip install -e ".[test]"` for development). Pinned FastChat revision
-and install checks: [reference](docs/reference.md#installation-details).
-
-Claude Code plugin (`davi`, marketplace `datumo`):
-
-```bash
-claude plugin marketplace add selectstar-ai/EVAL.Davi
-claude plugin install davi@datumo
-claude mcp add --transport stdio --env TAVILY_API_KEY="$TAVILY_API_KEY" tavily -- npx -y tavily-mcp@0.2.22
-```
-
-The hook runs `python3` and needs **httpx** in that interpreter (or in a private venv in the plugin's data
-directory); see [plugin install](docs/plugin.md#install). It also needs your own Jev-compatible choice endpoint
-(RunPod key, endpoint ID and per-second rate, set in [Configure](docs/plugin.md#configure)); without them it sends
-nothing and changes nothing.
-
-The marketplace is now `datumo` (install id `davi@datumo`). A `davi@datumo` install does not inherit the settings,
-toggles or state of an earlier `davi@judge-adapter` install, and nothing moves or removes the old one. If both are
-active, the hooks may run twice: check `/plugin` and keep only one.
-
-## About
-
-- **Context filter** (`judge_adapter.context_filter`): one choice call per retrieved document reads P(keep); an
-  explicit policy (`threshold(t)`, `top_k(k)`, `disabled()` or the preset `v1-thr0.3-dev`) keeps or drops it. It
-  returns ids and decisions in input order, never rewrites or stores text, and keeps a document whose call fails
-  (fail-open). There is no default policy.
-- **Pairwise judge adapter**: one question (one or two turns) and two responses in, `A`, `B`, `tie` or an explicit
-  `error` out, with a trace of every call. JSONL CLI, Python API and an optional FastChat `llm_judge` binding. Fake
-  transport by default; a real (paid) CLI run needs `--allow-real`, `--max-submissions` and `--budget-cap-usd`.
-- **Claude Code plugin `davi`**: a PostToolUse hook that filters Tavily `tavily_search` results before the model reads
-  them, plus two optional, default-off, experimental query-stage options (search gate, domain presets).
-- This package ships no model and no worker; endpoint, model and price come only from your configuration.
-
-## Quickstart
-
-No key and no network: both examples run against in-process fake endpoints.
-
-```python
-from judge_adapter import AdapterConfig, build_backend, fakes
-from judge_adapter.context_filter import ContextFilter, Document, select_originals, threshold
-
-cfg = AdapterConfig(transport='fake', backend='choice_endpoint', trace_dir='unused')
-fake = fakes.FakeRelevanceEndpoint()                    # in-process; [[KEEP=p]] in the text sets the fake P(keep)
-backend = build_backend(cfg, transport=fake.transport(), key_provider=lambda: fakes.DUMMY_KEY)
-flt = ContextFilter(cfg, backend, policy=threshold(0.5))   # no default policy: pass one, or preset=...
-docs = [Document('d1', 'A title', 'https://example.invalid/1', 'synthetic text [[KEEP=0.8]]'),
-        Document('d2', 'A title', 'https://example.invalid/2', 'synthetic text [[KEEP=0.1]]')]
-res = flt.filter('a question', docs)
-res.selected_ids                                        # ['d1'], input order
-[(r.id, r.score, r.status, r.decision) for r in res.documents]
-kept = select_originals(docs, res)                      # your own objects, unchanged
-```
-
-Judge the bundled synthetic pairs with the fake transport:
-
-```bash
-judge-adapter run "$(judge-adapter examples | grep pairs.example.jsonl)" --out ./run-fake --transport fake
-```
-
-Real endpoints, `validate`, `two_direction` and the FastChat binding: [reference](docs/reference.md).
-
-## Results
-
-Single runs outside this package's test suite; not guarantees. Setup: HLE (Humanity's Last Exam), 90 English
-text-only questions, a GPT-5.2 agent with web search, 5 documents per search, preset `v1-thr0.3-dev`, compared with
-keeping the top 3 documents and keeping all 5. Answers were graded by Haiku against the reference answers.
-
-| | Filter (`v1-thr0.3-dev`) | Keep top 3 | Keep all 5 |
-|---|---|---|---|
-| Agent input tokens, filter vs. this setting (HLE, 86 questions where all three finished) | | **−31.4%** | **−44.9%** |
-| Correct answers, HLE (90 English questions) | 28 | 27 | 31 |
-| Correct answers, earlier run (25 Korean questions) | 14 | 10 | 12 |
-
-- **Input tokens went down.** On the 86 questions where all three settings finished, agent input tokens were 31.4%
-  lower than keeping the top 3 documents and 44.9% lower than keeping all 5. (Correction: an earlier version of this
-  README said "summed over all 90 questions, about 44% lower" than top-3. That sum counted 4 interrupted trajectories
-  as 0 tokens, 3 of them in the filter setting, which inflated the reduction; it is replaced by the 86-question
-  figures above.)
-- **Accuracy was not shown to change.** In both runs the filter answered at least as many questions as top-3 (+1/90,
-  +4/25), but neither difference is statistically established. Against all 5 documents the results were mixed (−3/90,
-  +2/25). The preset was selected on development data (see [Preset](docs/reference.md#preset-v1-thr03-dev-opt-in)).
-- **Total cost was not shown to go down.** Filter decisions are input-only; at a Jev-style list price of $0.042 per 1M
-  input tokens (an assumption; this package does not serve that model) they cost about $0.0003 per question. Total
-  cost depended on the generator's output: on the 86 HLE questions the filter setting produced 6.7% more output tokens
-  and cost 4.5% more in total than top-3. No total-cost saving is established.
-- **One run per setting.** The token comparison uses the 86 of 90 HLE questions where all three settings finished, a
-  subset fixed after the run (post hoc), not a pre-registered split. Quality improvement or equivalence is not
-  established, and neither is a total-cost advantage.
-
-In the same HLE run, all 5 documents were dropped in 25 of the 72 searches the filter setting made: a per-search
-count from a single run, not a general drop rate or failure rate. Total cost also depends on the price you configure
-for filter calls (`choice_usd_per_second`) and on the model you actually serve behind the endpoint; the package ties
-neither to the other, and its estimate is not a bill.
-
-**Intended use:** an opt-in input-reduction tool. It does not claim quality improvement or total-cost savings.
-
-
-## Claude Code plugin
-
-`davi` filters **only Tavily `tavily_search`** (`tavily-mcp` 0.2.22, matcher `^mcp__[A-Za-z0-9_-]+__tavily_search$`).
-**Built-in WebSearch is not filtered**: in one observed run it returned only a title and a URL per result, with no
-text to score. Every other tool is untouched by the result filter. On any error the result is left unchanged
-(fail-open); every search waits for the filter calls (one per scored result), up to the wall budget.
-
-Switch features inside Claude Code with fixed, argument-free commands:
-
-| Command | Effect |
-|---|---|
-| `/davi:status` | Effective settings and where each comes from |
-| `/davi:filter-on`, `/davi:filter-off` | Result filter (PostToolUse, Tavily) |
-| `/davi:gate-on`, `/davi:gate-off` | Search gate (experimental) |
-| `/davi:domain-on`, `/davi:domain-off` | Domain presets (experimental) |
-| `/davi:domain-mode-ask`, `/davi:domain-mode-input-only` | How a domain preset is applied |
-
-- **Each command uses one model turn**: Claude reads the command's output and relays it. The same switches work
-  from a shell without a model turn (`python3 <plugin>/hooks/davi_toggle.py ...`).
-- **The toggle file is install-wide**, not per session: a change applies to every session using that data directory,
-  including sessions that are already running. userConfig `enabled=false` overrides every toggle.
-- **Query-stage options are default-off and experimental**, with untuned prompts and thresholds and no quality claim.
-  The domain apply mode defaults to `ask`; in headless (`-p`) runs `ask` can block the search.
-
-Verification (details and every row: [docs/verification.md](docs/verification.md)):
-
-| Status | What |
-|---|---|
-| Observed in a real run (once each) | Tavily search: 5 filter calls, all 5 kept, result unchanged · WebSearch: 0 filter calls, unchanged · `/davi:status`, `gate-on/off`, `domain-on/off` in headless `claude -p` · the known A1 prompt kept with no gate call (after the fix) · domain preset applied by `input_only` (once) |
-| Fake tests only | Dropped results removed and the shorter result received by the model · query-stage shapes, deny / retry, fail-open · explicit-request phrasings other than A1 |
-| Unverified | `ask`, the **default** domain mode (needs an interactive session) · `filter-*`, `domain-mode-*` and interactive command use · gate usefulness and **general** preservation of user intent |
-| Failures recorded | A1: before the fix, the gate denied a search the user explicitly asked for (P(not needed) = 0.999); release-blocking, so the gate stays default-off · one `input_only` smoke timed out (15.3 s, fail-open) and the harness missed it as a stop condition |
-
-The A1 fix (a local check of the user's prompt against a fixed list of explicit-request phrasings) protects the
-known phrasing class only; a phrasing outside the list can still be denied. Install, configuration, logs and the
-security notes for the commands: [docs/plugin.md](docs/plugin.md).
+> Experimental. Every hook is off by default and fail-open: a hook error or a slow judge leaves the call unchanged,
+> and a failed judgment falls back to the cheap model (`on_error`). A hook never blocks Claude Code on its own error.
 
 ## How it works
 
 ```
- question ─┐
-           ├─▶ one choice call per document ─▶ P(keep) ─▶ policy ─▶ keep / drop ─▶ selected_ids (input order)
- documents ┘   (question id "relevance",        (from the     (threshold,
-               options opt_keep / opt_drop)      endpoint)     top_k, ...)
-               a failed call ───────────────────────────────────────▶ keep (fail-open, status says why)
+main agent ── Agent tool call (prompt, model?) ──▶ PreToolUse hook (davi-route)
+                                                     │
+                                                     ▼
+                                    judge: "how hard is this task for a small
+                                    model answering from memory?"  levels 1-5
+                                                     │  expected level, 0-1
+                         ┌───────────────────────────┼───────────────────────────┐
+                    level < 0.48               0.48 ≤ level < 0.78           level ≥ 0.78
+                         ▼                           ▼                           ▼
+                   model = haiku               model = sonnet              model = opus
+                         └──────────── updatedInput.model ──▶ subagent runs ─────┘
 
- question + response A + response B ─▶ backend call (AB; BA in two_direction) ─▶ opt_1 / opt_2 / opt_tie ─▶ A / B / tie
-                                                                       a failure ─▶ explicit error (never a tie)
-
-Tavily MCP result (mcp__<alias>__tavily_search)
-   │
-   ▼
-hook: split into per-result snippets ──(unknown format / isError / structuredContent)──▶ result unchanged
-   │   (header, Answer:, images, other blocks kept aside, never scored)
-   ▼
-1 filter call per result: P(keep) ──(error)──▶ keep that result
-   │
-   ▼
-keep if P(keep) >= 0.3, else drop ──▶ same text / blocks with dropped results removed ──▶ model
-Any other tool, incl. built-in WebSearch: not matched (zero intervention)
+judge failed ──▶ cheap model (on_error=accept) or strong (on_error=escalate)
+judge too slow (wall_budget_seconds) ──▶ the call is left as it was
 ```
 
-Details: [context filter](docs/reference.md#context-filter), [pairwise judge](docs/reference.md#pairwise-judge-adapter),
-[plugin hook](docs/plugin.md#what-the-hook-changes), [configuration and limits](docs/reference.md#configuration-and-limits).
+- **A hook cannot switch the main session's model**, so routing is applied where Claude Code accepts a model per
+  call: the `model` field of each `Agent` tool call (PreToolUse `updatedInput`, verified in a real Claude Code run).
+- The judge reads **only the task**, before any answer exists, so routing costs one judge call and no extra model
+  run. With Davi (`/v1/systemone`) the five levels come back as probabilities in one call, typically under a second.
+- Other modes are kept for comparison (`route_mode`): `post` (haiku first, the judge reads its answer, opus re-runs
+  when needed), `pre` (two models, routed up front) and `both`. A Stop hook can also check completion
+  (`stop_verify_enabled`).
 
-## What changed in 0.4.1
+## Results
 
-No model, selection-policy or plugin-option change. Internal restructuring and one concurrency fix:
+KLEAR (174 hard Korean QA items), each item run with haiku 5.5, sonnet 5.5 and opus 5.5 headless (`claude -p`), five
+rounds, 870 runs per policy. Correct answers and model-run cost over the five rounds:
 
-- Hook contracts shared by the plugin (option reading, env names, flag/number parsing, state directory, log line,
-  time budget) moved into one stdlib-only module, `plugin_common`; the run-wide filter ledger moved to
-  `gate.JobLedger`. Hook output, logs, state files and cost caps were compared byte for byte before and after on 76
-  fixed fake cases (identical). Total lines grew slightly (+52 in the touched modules); the gain is fewer copies and
-  no private cross-module imports, not size.
-- Fixed a race in the search gate's prompt state: pruning now deletes a day-old session file only while holding that
-  session's lock (non-blocking; skipped if busy), and the lock inode is re-checked after locking. Three deterministic
-  multi-process scenarios failed before the fix and pass after it. This applies where `fcntl` is available (not on
-  Windows); temporary files and the no-`fcntl` path are handled as before.
-- `docs/` now ships in the source distribution, so the README's links resolve there.
-- Tests: 550 passed, 4 skipped (the FastChat modules, which need the optional extra and a checkout, were not run).
-  The repository moved to `selectstar-ai/EVAL.Davi` and the install identifier is `davi@datumo` (see
-  [Claude Code plugin](#claude-code-plugin)).
+| Policy | Correct (of 870) | Accuracy | Model-run cost |
+|---|---|---|---|
+| haiku only | 451 | 51.8% | $0.96 |
+| sonnet only | 574 | 66.0% | $9.15 |
+| 3-tier, Claude Haiku 5.5 as judge | 587 | 67.5% | $10.18 |
+| 3-tier, TypeSafe Jev as judge | 604 | 69.4% | $9.66 |
+| **3-tier, Davi as judge** | **619** | **71.1%** | **$10.78** |
+| opus only | 612 | 70.3% | $14.99 |
 
-## Further work
+- **Against opus only:** 7 more correct answers (+0.8 points) at **28% lower cost** ($4.21 less). Davi's 3-tier
+  policy matched or beat opus in 3 of 5 rounds and cost less in every round (70–75% of opus).
+- **Against the other judges:** Davi's routing was ahead of Claude's and Jev's in every round. In a fair split
+  (cut-offs chosen on half of the items, measured on the other half, 80% of the opus budget) accuracy was Davi
+  69.9%, Jev 66.9%, Claude 63.4%.
+- **Consistency:** across the five rounds, Davi changed its tier for 2 items, Jev for 14 and Claude for 40.
+- **Inside Claude Code:** 43 candidate items were run four times through the real plugin (`Agent` tool,
+  `route_mode=tiers`, Davi). 24 items got the same model and a correct answer in all four runs.
 
-Follow-up candidates, not a committed roadmap and not instructions to run anything:
+Caveats, stated plainly:
 
-1. **Verify the unverified parts of the current integration and check usability:** the `ask` default for domain
-   presets in an interactive session; the `/davi:filter-*` and `/davi:domain-mode-*` commands in a real session; a
-   real run in which the filter drops results and the model receives the shorter result; general preservation of user
-   intent by the search gate.
-2. Conditional, separate candidates: merge reference-answer (pointwise) grading support, which is not part of 0.4.1;
-   resume the multi-turn evaluation, on hold because of license constraints on the evaluation corpus.
+- The default cut-offs (0.48 / 0.78) were fitted on this same data, so the headline numbers are optimistic; the
+  split-half figures above are the fairer comparison. Recalibrate for your own workload.
+- Costs are Claude Code `total_cost_usd` list-price estimates of the model runs, not bills. **Judge calls are not
+  included** (Davi's price is not set; Jev's $0.042/MTok is an assumption).
+- One dataset, one language, one task type (closed-book QA). Coding or long agentic tasks were not measured.
+- The 24 demo items were selected on outcomes; they illustrate the behaviour and are not a performance estimate.
 
-## Citation
+## Install
 
-If you use this software, please cite the repository:
+Python 3.9+ with `httpx`. The plugin loads from a checkout of this repository (it is not in a marketplace).
 
-```bibtex
-@software{judge_adapter_2026,
-  author  = {hundredeuk2},
-  title   = {judge-adapter: context filtering and pairwise LLM-judge calls},
-  year    = {2026},
-  version = {0.4.1},
-  url     = {https://github.com/selectstar-ai/EVAL.Davi}
-}
+```bash
+git clone https://github.com/selectstar-ai/EVAL.Davi && cd EVAL.Davi
+pip install -e ".[test,lint]"
 ```
+
+The hook runs `python3`; if that interpreter cannot import `httpx`, the hook tries `${CLAUDE_PLUGIN_DATA}/venv` and
+otherwise logs `dependency_missing` and changes nothing. It never installs anything.
+
+## Quickstart
+
+```bash
+export DAVI_BASE_URL=http://<your-davi-host>:<port>   # POST /v1/systemone
+export DAVI_ROUTE_ROUTE_ENABLED=true
+export DAVI_ROUTE_ROUTE_MODE=tiers
+export DAVI_ROUTE_LOG_FILE=$PWD/route.jsonl
+
+claude --plugin-dir plugins/davi-route
+```
+
+Then ask for work that uses subagents ("Use the Agent tool to ..."). Each `Agent` call gets a model, and each hook
+call writes one JSON line (level, tier, model, latency; never the task text):
+
+```bash
+davi-route hooklog route.jsonl
+```
+
+Settings come from `DAVI_ROUTE_<KEY>` environment variables, which take precedence over the plugin's userConfig
+(`CLAUDE_PLUGIN_OPTION_<KEY>`).
+
+## Settings
+
+| Key | Default | Meaning |
+|---|---|---|
+| `route_enabled` | `false` | Turn subagent routing on |
+| `route_mode` | `post` | `tiers` (3 models by difficulty), `post`, `pre`, `both` |
+| `route_judge` | `davi` | `davi`, `jev`, `claude`, `fake` |
+| `route_cheap_model` / `route_mid_model` / `route_strong_model` | `haiku` / `sonnet` / `opus` | Model strings |
+| `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | Difficulty cut-offs (KLEAR-fitted) |
+| `route_tier_check` | `false` | `tiers`: also judge answers that went to the cheap model |
+| `route_threshold` / `route_pre_threshold` | `0.5` / `0.5` | `post` / `pre` thresholds on P(accept) |
+| `route_pin_cheap` | `always` | `post`: when to set the cheap model on an `Agent` call |
+| `route_agent_types` | (all) | Comma-separated `subagent_type` filter |
+| `stop_verify_enabled` | `false` | Completion check at Stop (blocks at most `stop_max_blocks` times) |
+| `on_error` | `accept` | On a judge failure: `accept` (cheap model, fail-open) or `escalate` |
+| `wall_budget_seconds` | `25` | Time limit per hook call; past it nothing changes |
+| `log_file` | (none) | JSONL log of every hook call |
+
+Every option, its effect and the judge prompts: [docs/routing.md](docs/routing.md).
+
+## Judges
+
+| Judge | Endpoint | Probability | Cost estimate |
+|---|---|---|---|
+| `davi` | `DAVI_BASE_URL` + `/v1/systemone` (optional key `DAVI_API_KEY`); else a RunPod choice endpoint | Choice probabilities (5 levels for `tier`) | Unknown until `davi_usd_in_per_mtok` is set |
+| `jev` | `https://api.typesafe.ai/v1/systemone`, key `JEV_API_KEY` or `TYPESAFE_API_KEY` | Choice probabilities | Usage × $0.042/MTok (assumed) |
+| `claude` | Anthropic Messages, key `ANTHROPIC_API_KEY`, default `claude-haiku-5-5`, effort low | A verbalized number (no logprobs) | Usage × list price |
+| `fake` | In process; `[[ACCEPT=p]]` in the text sets P | Fixed | 0 |
+
+```bash
+davi-route verify --judge davi --kind tier --task "What is 17*23?" --candidate ""
+```
+
+## Measuring your own workload
+
+The `davi-route` CLI runs tasks headless, judges them and replays routing policies offline:
+
+```bash
+# 1) run every task once per model (spends money: needs --yes; --dry-run prints the commands)
+davi-route generate --tasks tasks.jsonl --cache runs/x \
+    --arm cheap=haiku --arm mid=sonnet --arm strong=opus --yes
+# 2) judge the tasks (tier) or the cheap answers (answer)
+davi-route judge --tasks tasks.jsonl --cache runs/x --source-arm cheap \
+    --judge davi --judge claude --kind tier
+# 3) curves, baselines and a frozen threshold on a held-out split
+davi-route analyze --cache runs/x --cheap cheap --strong strong
+```
+
+A task line has `id`, `prompt` and either `answer` + `grader` (`contains`, `exact`, `regex`, `number`, `llm`) or a
+`check_cmd`. Other commands: `regrade`, `curate`, `demo`, `hooklog`, `probe`. Details: [docs/routing.md](docs/routing.md).
+
+## Code layout
+
+`src/judge_adapter/routing/`, PEP 8 (79 columns) and the conventions in [CLAUDE.md](CLAUDE.md):
+
+| Module | Contents |
+|---|---|
+| `config.py` | Options and secrets from the environment (`DAVI_ROUTE_*` over `CLAUDE_PLUGIN_OPTION_*`) |
+| `questions.py` | Judge questions per kind (`answer`, `completion`, `pre`, `tier`) and the Davi phrasing ensemble |
+| `verifiers.py` | `Verifier` (abstract) → `FakeVerifier`, `DaviRunPodVerifier`, `HttpVerifier` → `SystemOneVerifier` (`DaviVerifier`, `JevVerifier`), `ClaudeVerifier` |
+| `policy.py` | `RoutePolicy` (accept / escalate) and `TierPolicy` (cheap / mid / strong) |
+| `hooks.py` | `Settings`, `State`, `RouteHook` (abstract) → `AgentPreHook`, `AgentPostHook`, `StopHook`, and `main` |
+| `grading.py` | `Grader` (abstract) → exact, contains, regex, number, command, LLM graders |
+| `harness.py` | Tasks, arms, `RunCache`, `claude -p` runs, judging, regrading |
+| `analysis.py` | `ReplayRow`, baselines, sweeps, frozen thresholds, demo tables |
+| `cli.py`, `probe.py` | The `davi-route` command and the hook mechanism probes |
+
+```bash
+ruff check && ruff format --check
+pytest tests/test_routing.py
+```
+
+## Legacy: the `davi` search-result filter
+
+This repository started as `judge-adapter`: a pairwise LLM-judge adapter and a Claude Code plugin (`davi`) that
+filters Tavily search results with a choice model before the agent reads them. It is unchanged and still installs
+as before (`claude plugin install davi@datumo`). See [docs/plugin.md](docs/plugin.md),
+[docs/reference.md](docs/reference.md) and [docs/verification.md](docs/verification.md).
 
 ## License
 
-Apache-2.0. See `LICENSE` and `NOTICE` (the default pairwise judge wording is adapted from FastChat's MT-Bench judge
-prompts).
+Apache-2.0. See `LICENSE` and `NOTICE`.

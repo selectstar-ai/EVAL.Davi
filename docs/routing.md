@@ -9,9 +9,10 @@
 | 구성 | 위치 | 하는 일 |
 |---|---|---|
 | Verifier | `src/judge_adapter/routing/verifiers.py` | `verify(task, candidate, rubric, kind) -> P(accept)`. 판정자 `davi`, `jev`, `claude`, `fake` |
-| Policy (E) | `routing/policy.py` | P(accept) → accept / escalate, **다음 모델을 문자열로** 반환 (`Route.next_model`) |
+| Policy (E) | `routing/policy.py` | P(accept) → accept / escalate (`RoutePolicy`), 난이도 → cheap / mid / strong (`TierPolicy`). **다음 모델을 문자열로** 반환 |
 | Hooks A / E / B | `routing/hooks.py`, `plugins/davi-route/` | A: Agent 결과 검증, E: 다음 Agent 호출의 model 지정, B: Stop 시 완료 검증 |
-| Harness C | `routing/harness.py`, CLI `davi-route` | `claude -p`로 arm별 실행 → 판정 → 오프라인 곡선, 기준선, 고정 임계값 결과 |
+| Harness C | `routing/harness.py`, `routing/analysis.py`, CLI `davi-route` | `claude -p`로 arm별 실행 → 판정(harness) → 오프라인 곡선, 기준선, 고정 임계값 결과(analysis) |
+| 공통 | `routing/config.py`, `routing/questions.py`, `routing/grading.py` | 설정·키 읽기, 판정 질문 문구, 채점기 |
 | Probes | `routing/probe.py`, `davi-route probe` | 실제 Claude Code에서 hook 메커니즘 확인 (아래 1~4) |
 
 ## 판정자

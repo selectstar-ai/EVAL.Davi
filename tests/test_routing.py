@@ -1,678 +1,1473 @@
-"""Routing experiments (scenario 3): verifiers, policy, Claude Code hooks (A / E / B), harness and probes.
-Model-free: every HTTP call goes to an in-process MockTransport; claude -p is replaced by a fake runner."""
+"""Routing: verifiers, policies, Claude Code hooks, grading, harness,
+analysis and probes.
+
+Model-free: every HTTP call goes to an in-process MockTransport; claude -p
+is replaced by a fake runner.
+"""
+
 from __future__ import annotations
 
 import io
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import httpx
 import pytest
 
-from judge_adapter.routing import harness as Hn
-from judge_adapter.routing import hooks as RH
-from judge_adapter.routing import probe as Pr
-from judge_adapter.routing import verifiers as V
-from judge_adapter.routing.policy import RoutePolicy, same_model
+from judge_adapter.keys import CredentialMissing
+from judge_adapter.routing import (
+    analysis,
+    cli,
+    grading,
+    harness,
+    probe,
+    verifiers,
+)
+from judge_adapter.routing import hooks as route_hooks
+from judge_adapter.routing.config import ConfigError, opt_number, unquote
+from judge_adapter.routing.hooks import (
+    AgentPostHook,
+    AgentPreHook,
+    Settings,
+    State,
+    StopHook,
+)
+from judge_adapter.routing.policy import RoutePolicy, TierPolicy, same_model
+from judge_adapter.routing.questions import (
+    KINDS,
+    LABELS,
+    PRE_ENSEMBLE,
+    QUESTION_ID,
+    clip,
+)
+from judge_adapter.routing.verifiers import FakeVerifier, Verdict
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / 'plugins' / 'davi-route'
+LAUNCHER = str(PLUGIN / 'hooks' / 'route_hook.py')
+LAUNCHER_ARG = '${CLAUDE_PLUGIN_ROOT}/hooks/route_hook.py'
 KEY = 'sk-fake-ROUTE-KEY-not-a-secret-0123456789'
 
 
-# --- policy (E: the next model as a string) -------------------------------------------------------------------------
+def quiet(*_args):
+    """A ``log`` that prints nothing."""
+
+
+# --- policy -----------------------------------------------------------------
 def test_policy_escalates_below_threshold_with_next_model_string():
-    pol = RoutePolicy(threshold=0.6, strong_model='opus')
-    assert pol.decide(0.59).decision == 'escalate' and pol.decide(0.59).next_model == 'opus'
-    assert pol.decide(0.6).decision == 'accept' and pol.decide(0.6).next_model is None
+    policy = RoutePolicy(threshold=0.6, strong_model='opus')
+    route = policy.decide(0.59)
+    assert route.decision == 'escalate' and route.next_model == 'opus'
+    route = policy.decide(0.6)
+    assert route.decision == 'accept' and route.next_model is None
 
 
-def test_policy_never_escalates_from_the_strong_model_and_fails_open_by_default():
-    pol = RoutePolicy(strong_model='opus')
-    assert pol.decide(0.01, current_model='claude-opus-5-5').reason == 'already_strong'
-    assert pol.decide(None).decision == 'accept'
-    assert RoutePolicy(on_error='escalate').decide(None).decision == 'escalate'
+def test_policy_never_escalates_the_strong_model_and_fails_open():
+    policy = RoutePolicy(strong_model='opus')
+    route = policy.decide(0.01, current_model='claude-opus-5-5')
+    assert route.reason == 'already_strong'
+    assert policy.decide(None).decision == 'accept'
+    escalating = RoutePolicy(on_error='escalate')
+    assert escalating.decide(None).decision == 'escalate'
     assert same_model('Opus', 'opus') and not same_model('haiku', 'opus')
     with pytest.raises(ValueError):
         RoutePolicy(threshold=1.5)
 
 
-# --- verifiers ------------------------------------------------------------------------------------------------------
+def test_tier_policy_cutoffs_and_failures():
+    policy = TierPolicy(low=0.4, high=0.8)
+    assert [policy.tier_of(x) for x in (0.1, 0.4, 0.79, 0.8)] == [
+        'cheap',
+        'mid',
+        'mid',
+        'strong',
+    ]
+    assert policy.tier_of(None) == 'cheap'
+    assert TierPolicy(on_error='escalate').tier_of(None) == 'strong'
+    assert policy.model_for('mid') == 'sonnet'
+    with pytest.raises(ValueError):
+        TierPolicy(low=0.9, high=0.2)
+
+
+# --- config -----------------------------------------------------------------
+def test_options_override_plugin_options_and_validate():
+    env = {
+        'DAVI_ROUTE_ROUTE_THRESHOLD': '0.7',
+        'CLAUDE_PLUGIN_OPTION_ROUTE_THRESHOLD': '0.2',
+        'CLAUDE_PLUGIN_OPTION_ROUTE_JUDGE': 'jev',
+    }
+    settings = Settings.from_env(env)
+    assert settings.route_threshold == 0.7
+    assert settings.route_judge == 'jev' and settings.stop_judge == 'jev'
+    with pytest.raises(ConfigError):
+        Settings.from_env({'DAVI_ROUTE_ROUTE_JUDGE': 'gpt'})
+    assert unquote('"http://davi.test"') == 'http://davi.test'
+    with pytest.raises(ConfigError):
+        opt_number({'DAVI_ROUTE_X': '7'}, 'x', high=1.0)
+
+
+# --- verifiers --------------------------------------------------------------
 def jev_transport(seen, p=0.27, status=200, body=None):
-    def handle(req):
-        seen.append(req)
+    def handle(request):
+        seen.append(request)
         if status != 200:
-            return httpx.Response(status, text=f'nope {req.headers.get("authorization")}')
-        b = json.loads(req.content)
-        qid = next(iter(b['questions']))
-        return httpx.Response(200, json=body or {
-            'model': 'jev-1.13.0', 'usage': {'input_tokens': 1000, 'output_tokens': 3},
-            'answers': {qid: {'type': 'choice', 'choice': 'accept' if p >= 0.5 else 'escalate',
-                              'probabilities': {'accept': p, 'escalate': 1 - p}}}})
+            auth = request.headers.get('authorization')
+            return httpx.Response(status, text=f'nope {auth}')
+        question_id = next(iter(json.loads(request.content)['questions']))
+        answer = {
+            'type': 'choice',
+            'choice': 'accept' if p >= 0.5 else 'escalate',
+            'probabilities': {'accept': p, 'escalate': 1 - p},
+        }
+        return httpx.Response(
+            200,
+            json=body
+            or {
+                'model': 'jev-1.13.0',
+                'usage': {'input_tokens': 1000, 'output_tokens': 3},
+                'answers': {question_id: answer},
+            },
+        )
+
     return httpx.MockTransport(handle)
 
 
 def test_jev_wire_format_and_parse():
     seen = []
-    v = V.JevVerifier(lambda: KEY, transport=jev_transport(seen, 0.27))
-    r = v.verify('What is 2+2?', 'The answer is 5.', rubric='exact', kind='answer')
-    (req,) = seen
-    assert req.url.path == '/v1/systemone' and req.headers['authorization'] == f'Bearer {KEY}'
-    body = json.loads(req.content)
-    assert body['model'] == 'jev-latest' and set(body['state']) == {'task', 'candidate', 'rubric'}
-    q = body['questions'][V.QUESTION_ID]
-    assert q['type'] == 'choice' and set(q['criteria']) == {'accept', 'escalate'}
-    assert r.outcome == 'ok' and r.p_accept == pytest.approx(0.27) and r.model == 'jev-1.13.0'
-    assert r.cost_usd == pytest.approx(1000 * 0.042 / 1e6)
+    verifier = verifiers.JevVerifier(
+        lambda: KEY, transport=jev_transport(seen)
+    )
+    verdict = verifier.verify(
+        'What is 2+2?', 'The answer is 5.', rubric='exact', kind='answer'
+    )
+    (request,) = seen
+    assert request.url.path == '/v1/systemone'
+    assert request.headers['authorization'] == f'Bearer {KEY}'
+    body = json.loads(request.content)
+    assert body['model'] == 'jev-latest'
+    assert set(body['state']) == {'task', 'candidate', 'rubric'}
+    question = body['questions'][QUESTION_ID]
+    assert question['type'] == 'choice'
+    assert set(question['criteria']) == {'accept', 'escalate'}
+    assert verdict.outcome == 'ok' and verdict.model == 'jev-1.13.0'
+    assert verdict.p_accept == pytest.approx(0.27)
+    assert verdict.cost_usd == pytest.approx(1000 * 0.042 / 1e6)
 
 
 def test_jev_failures_are_verdicts_and_never_leak_the_key():
-    r = V.JevVerifier(lambda: KEY, transport=jev_transport([], status=500)).verify('t', 'c')
-    assert r.p_accept is None and r.outcome == 'http' and KEY not in (r.detail or '')
-    r = V.JevVerifier(lambda: KEY, transport=jev_transport([], body={'answers': {}, 'usage': {}})).verify('t', 'c')
-    assert r.outcome == 'format_error'
+    failing = verifiers.JevVerifier(
+        lambda: KEY, transport=jev_transport([], status=500)
+    )
+    verdict = failing.verify('t', 'c')
+    assert verdict.p_accept is None and verdict.outcome == 'http'
+    assert KEY not in (verdict.detail or '')
+    empty = jev_transport([], body={'answers': {}, 'usage': {}})
+    verdict = verifiers.JevVerifier(lambda: KEY, transport=empty).verify(
+        't', 'c'
+    )
+    assert verdict.outcome == 'format_error'
 
     def missing():
-        raise V.CredentialMissing('no key')
-    r = V.JevVerifier(missing, transport=jev_transport([])).verify('t', 'c')
-    assert r.outcome == 'local_config' and r.cost_usd == 0.0
+        raise CredentialMissing('no key')
+
+    verdict = verifiers.JevVerifier(
+        missing, transport=jev_transport([])
+    ).verify('t', 'c')
+    assert verdict.outcome == 'local_config' and verdict.cost_usd == 0.0
+
+
+def test_verifiers_share_one_abstract_interface():
+    with pytest.raises(TypeError):
+        verifiers.Verifier()
+    with pytest.raises(TypeError):
+        verifiers.HttpVerifier(lambda: KEY, 'http://x')
+    for cls in (
+        FakeVerifier,
+        verifiers.DaviVerifier,
+        verifiers.JevVerifier,
+        verifiers.ClaudeVerifier,
+        verifiers.DaviRunPodVerifier,
+    ):
+        assert issubclass(cls, verifiers.Verifier)
+    assert issubclass(verifiers.DaviVerifier, verifiers.SystemOneVerifier)
+    fake = FakeVerifier()
+    fake.verify('t', 'c')
+    with pytest.raises(AttributeError):
+        fake.calls = []
+    with pytest.raises(ValueError):
+        fake.verify('t', 'c', kind='unknown')
 
 
 def claude_transport(seen, reply='23'):
-    def handle(req):
-        seen.append(req)
-        return httpx.Response(200, json={'model': 'claude-haiku-4-5-20251001', 'stop_reason': 'end_turn',
-                                         'content': [{'type': 'text', 'text': reply}],
-                                         'usage': {'input_tokens': 500, 'output_tokens': 2}})
+    def handle(request):
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                'model': 'claude-haiku-4-5-20251001',
+                'stop_reason': 'end_turn',
+                'content': [{'type': 'text', 'text': reply}],
+                'usage': {'input_tokens': 500, 'output_tokens': 2},
+            },
+        )
+
     return httpx.MockTransport(handle)
 
 
 def test_claude_verbalized_probability():
     seen = []
-    r = V.ClaudeVerifier(lambda: KEY, model='claude-haiku-4-5-20251001',
-                         transport=claude_transport(seen, '23')).verify('t', 'c', kind='completion')
+    verifier = verifiers.ClaudeVerifier(
+        lambda: KEY,
+        model='claude-haiku-4-5-20251001',
+        transport=claude_transport(seen, '23'),
+    )
+    verdict = verifier.verify('t', 'c', kind='completion')
     body = json.loads(seen[0].content)
-    assert seen[0].headers['x-api-key'] == KEY and body['max_tokens'] == 8 and body['temperature'] == 0.0
-    assert V.KINDS['completion']['instructions'] in body['messages'][0]['content']
-    assert r.p_accept == pytest.approx(0.23) and r.cost_usd == pytest.approx(500 / 1e6 + 2 * 5 / 1e6)
-    bad = V.ClaudeVerifier(lambda: KEY, transport=claude_transport([], 'maybe')).verify('t', 'c')
+    assert seen[0].headers['x-api-key'] == KEY
+    assert body['max_tokens'] == 8 and body['temperature'] == 0.0
+    instructions = KINDS['completion']['instructions']
+    assert instructions in body['messages'][0]['content']
+    assert verdict.p_accept == pytest.approx(0.23)
+    assert verdict.cost_usd == pytest.approx(500 / 1e6 + 2 * 5 / 1e6)
+    unsure = verifiers.ClaudeVerifier(
+        lambda: KEY, transport=claude_transport([], 'maybe')
+    )
+    bad = unsure.verify('t', 'c')
     assert bad.outcome == 'format_error' and bad.p_accept is None
-    assert V.parse_percent('100') == 1.0 and V.parse_percent('250') is None
+    assert verifiers.parse_percent('100') == 1.0
+    assert verifiers.parse_percent('250') is None
 
 
-def davi_transport(bodies):
-    def handle(req):
-        if '/runsync' not in req.url.path:
-            return httpx.Response(404)
-        b = json.loads(req.content)
-        bodies.append(b)
-        qid = next(iter(b['input']['questions']))
-        import re
-        m = re.search(r'\[\[ACCEPT=([0-9.]+)\]\]', b['input']['state']['candidate'])
-        p = float(m.group(1)) if m else 0.5
-        return httpx.Response(200, json={'id': 'j1', 'status': 'COMPLETED', 'delayTime': 10, 'executionTime': 400,
-                                         'output': {'model': 'davi-0.2.0', 'answers': {qid: {
-                                             'type': 'choice', 'choice': 'opt_accept' if p > 0.5 else 'opt_escalate',
-                                             'probabilities': {'opt_accept': p, 'opt_escalate': 1 - p}}}}})
+def test_claude_5_judges_use_effort_and_read_the_last_number():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                'content': [
+                    {'type': 'thinking', 'thinking': ''},
+                    {'type': 'text', 'text': '17*23 = 391, correct.\n\n96'},
+                ],
+                'usage': {'input_tokens': 1000, 'output_tokens': 100},
+            },
+        )
+
+    env = {
+        'ANTHROPIC_API_KEY': 'sk-test-0000000000',
+        'DAVI_ROUTE_CLAUDE_JUDGE_MODEL': 'claude-haiku-5-5',
+    }
+    verifier = verifiers.build_verifier(
+        'claude', env, transport=httpx.MockTransport(handler)
+    )
+    verdict = verifier.verify('What is 17*23?', '391')
+    assert verdict.p_accept == pytest.approx(0.96)
+    expected = 1000 * 0.10 / 1e6 + 100 * 0.50 / 1e6
+    assert verdict.cost_usd == pytest.approx(expected)
+    assert 'temperature' not in seen[0]
+    assert seen[0]['output_config'] == {'effort': 'low'}
+    assert seen[0]['max_tokens'] >= 1024
+    assert verifiers.uses_effort('claude-sonnet-5-5')
+    assert not verifiers.uses_effort('claude-haiku-4-5-20251001')
+
+
+def systemone_handler(seen, accept=0.81):
+    def handle(request):
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                'answers': {
+                    'route': {
+                        'probabilities': {
+                            'accept': accept,
+                            'escalate': 1 - accept,
+                        }
+                    }
+                },
+                'usage': {'input_tokens': 500, 'output_tokens': 1},
+                'model': 'davi-x',
+            },
+        )
+
     return httpx.MockTransport(handle)
 
 
-def test_claude_judge_on_5_generation_models_uses_effort_and_reads_the_last_number():
+def test_davi_systemone_needs_no_key_and_has_unknown_cost():
+    seen = []
+    transport = systemone_handler(seen)
+    base = {'DAVI_BASE_URL': 'http://davi.test:20100'}
+    verdict = verifiers.build_verifier(
+        'davi', base, transport=transport
+    ).verify('What is 17*23?', '391')
+    assert (verdict.judge, verdict.outcome, verdict.model) == (
+        'davi',
+        'ok',
+        'davi-x',
+    )
+    assert verdict.p_accept == pytest.approx(0.81)
+    assert verdict.cost_usd is None
+    assert str(seen[0].url) == 'http://davi.test:20100/v1/systemone'
+    assert 'authorization' not in seen[0].headers
+    question = json.loads(seen[0].content)['questions']['route']
+    assert question['type'] == 'choice'
+    assert set(question['criteria']) == set(LABELS)
+    priced = {**base, 'DAVI_ROUTE_DAVI_USD_IN_PER_MTOK': '0.02'}
+    verdict = verifiers.build_verifier(
+        'davi', priced, transport=transport
+    ).verify('q', 'a')
+    assert verdict.cost_usd == pytest.approx(500 * 0.02 / 1e6)
+    quoted = {'DAVI_BASE_URL': '"http://davi.test:20100"'}
+    verdict = verifiers.build_verifier(
+        'davi', quoted, transport=transport
+    ).verify('q', 'a')
+    assert verdict.outcome == 'ok'
+    assert str(seen[-1].url) == 'http://davi.test:20100/v1/systemone'
+
+
+def test_davi_pre_ensemble_asks_every_phrasing_and_averages_logits():
     seen = []
 
-    def handler(req):
-        seen.append(json.loads(req.content))
-        return httpx.Response(200, json={'content': [{'type': 'thinking', 'thinking': ''},
-                                                     {'type': 'text', 'text': '17*23 = 391, correct.\n\n96'}],
-                                         'usage': {'input_tokens': 1000, 'output_tokens': 100}})
-    v = V.build_verifier('claude', {'ANTHROPIC_API_KEY': 'sk-test-0000000000',
-                                    'DAVI_ROUTE_CLAUDE_JUDGE_MODEL': 'claude-haiku-5-5'},
-                         transport=httpx.MockTransport(handler))
-    r = v.verify('What is 17*23?', '391')
-    assert r.p_accept == pytest.approx(0.96) and r.cost_usd == pytest.approx(1000 * 0.10 / 1e6 + 100 * 0.50 / 1e6)
-    assert 'temperature' not in seen[0] and seen[0]['output_config'] == {'effort': 'low'}
-    assert seen[0]['max_tokens'] >= 1024
-    assert V.uses_effort('claude-sonnet-5-5') and not V.uses_effort('claude-haiku-4-5-20251001')
-
-
-def test_davi_through_a_systemone_base_url_needs_no_key_and_has_unknown_cost():
-    seen = []
-
-    def handler(req):
-        seen.append(req)
-        return httpx.Response(200, json={'answers': {'route': {'probabilities': {'accept': 0.81, 'escalate': 0.19}}},
-                                         'usage': {'input_tokens': 500, 'output_tokens': 1}, 'model': 'davi-x'})
-    v = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test:20100'}, transport=httpx.MockTransport(handler))
-    r = v.verify('What is 17*23?', '391')
-    assert (r.judge, r.outcome, r.p_accept, r.cost_usd, r.model) == ('davi', 'ok', 0.81, None, 'davi-x')
-    assert str(seen[0].url) == 'http://davi.test:20100/v1/systemone' and 'authorization' not in seen[0].headers
-    body = json.loads(seen[0].content)
-    assert body['questions']['route']['type'] == 'choice' and set(body['questions']['route']['criteria']) == set(V.LABELS)
-    v2 = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test:20100', 'DAVI_ROUTE_DAVI_USD_IN_PER_MTOK': '0.02'},
-                          transport=httpx.MockTransport(handler))
-    assert v2.verify('q', 'a').cost_usd == pytest.approx(500 * 0.02 / 1e6)
-    quoted = V.build_verifier('davi', {'DAVI_BASE_URL': '"http://davi.test:20100"'}, transport=httpx.MockTransport(handler))
-    assert quoted.verify('q', 'a').outcome == 'ok' and str(seen[-1].url) == 'http://davi.test:20100/v1/systemone'
-
-
-def test_davi_pre_ensemble_asks_every_phrasing_in_one_call_and_averages_logits():
-    seen = []
-
-    def handler(req):
-        body = json.loads(req.content)
+    def handler(request):
+        body = json.loads(request.content)
         seen.append(body)
         answers = {}
-        for k, q in body['questions'].items():
-            yes = next(v[2] for n, v in V.PRE_ENSEMBLE.items() if k == f'{V.QUESTION_ID}_{n}')
-            other = next(o for o in q['criteria'] if o != yes)
-            answers[k] = {'type': 'choice', 'probabilities': {yes: 0.8, other: 0.2}}
-        return httpx.Response(200, json={'answers': answers, 'usage': {'input_tokens': 900, 'output_tokens': 0}})
-    v = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test'}, transport=httpx.MockTransport(handler))
-    r = v.verify('Who wrote Hamlet?', kind='pre')
-    assert r.outcome == 'ok' and r.p_accept == pytest.approx(0.8)
-    assert len(seen) == 1 and len(seen[0]['questions']) == len(V.PRE_ENSEMBLE) and 'candidate' not in seen[0]['state']
-    off = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test', 'DAVI_ROUTE_DAVI_PRE_ENSEMBLE': 'false'},
-                           transport=httpx.MockTransport(lambda req: httpx.Response(200, json={'answers': {
-                               'route': {'probabilities': {'accept': 0.3, 'escalate': 0.7}}}})))
-    assert off.verify('Who wrote Hamlet?', kind='pre').p_accept == pytest.approx(0.3)
+        for question_id, question in body['questions'].items():
+            yes = next(
+                value[2]
+                for name, value in PRE_ENSEMBLE.items()
+                if question_id == f'{QUESTION_ID}_{name}'
+            )
+            other = next(o for o in question['criteria'] if o != yes)
+            answers[question_id] = {
+                'type': 'choice',
+                'probabilities': {yes: 0.8, other: 0.2},
+            }
+        return httpx.Response(
+            200,
+            json={
+                'answers': answers,
+                'usage': {'input_tokens': 900, 'output_tokens': 0},
+            },
+        )
+
+    env = {'DAVI_BASE_URL': 'http://davi.test'}
+    verifier = verifiers.build_verifier(
+        'davi', env, transport=httpx.MockTransport(handler)
+    )
+    verdict = verifier.verify('Who wrote Hamlet?', kind='pre')
+    assert verdict.outcome == 'ok'
+    assert verdict.p_accept == pytest.approx(0.8)
+    assert len(seen) == 1
+    assert len(seen[0]['questions']) == len(PRE_ENSEMBLE)
+    assert 'candidate' not in seen[0]['state']
+    single = {**env, 'DAVI_ROUTE_DAVI_PRE_ENSEMBLE': 'false'}
+    verifier = verifiers.build_verifier(
+        'davi', single, transport=systemone_handler([], accept=0.3)
+    )
+    verdict = verifier.verify('Who wrote Hamlet?', kind='pre')
+    assert verdict.p_accept == pytest.approx(0.3)
+
+
+def runpod_transport(bodies):
+    def handle(request):
+        if '/runsync' not in request.url.path:
+            return httpx.Response(404)
+        body = json.loads(request.content)
+        bodies.append(body)
+        question_id = next(iter(body['input']['questions']))
+        mark = re.search(
+            r'\[\[ACCEPT=([0-9.]+)\]\]',
+            body['input']['state']['candidate'],
+        )
+        p = float(mark.group(1)) if mark else 0.5
+        answer = {
+            'type': 'choice',
+            'choice': 'opt_accept' if p > 0.5 else 'opt_escalate',
+            'probabilities': {'opt_accept': p, 'opt_escalate': 1 - p},
+        }
+        return httpx.Response(
+            200,
+            json={
+                'id': 'j1',
+                'status': 'COMPLETED',
+                'delayTime': 10,
+                'executionTime': 400,
+                'output': {
+                    'model': 'davi-0.2.0',
+                    'answers': {question_id: answer},
+                },
+            },
+        )
+
+    return httpx.MockTransport(handle)
+
+
+RUNPOD_ENV = {
+    'DAVI_ROUTE_RUNPOD_API_KEY': KEY,
+    'DAVI_ROUTE_CHOICE_ENDPOINT_ID': 'ep1',
+    'DAVI_ROUTE_USD_PER_SECOND': '0.001',
+}
 
 
 def test_davi_verifier_through_the_existing_choice_backend():
     bodies = []
-    env = {'DAVI_ROUTE_RUNPOD_API_KEY': KEY, 'DAVI_ROUTE_CHOICE_ENDPOINT_ID': 'ep1', 'DAVI_ROUTE_USD_PER_SECOND': '0.001'}
-    v = V.build_verifier('davi', env, transport=davi_transport(bodies))
-    r = v.verify('task', 'answer [[ACCEPT=0.8]]')
-    assert r.outcome == 'ok' and r.p_accept == pytest.approx(0.8) and r.model == 'davi-0.2.0'
-    assert r.cost_usd == pytest.approx(0.4 * 0.001)
-    q = bodies[0]['input']['questions'][V.QUESTION_ID]
-    assert set(q['criteria']) == {'opt_accept', 'opt_escalate'}
-    tie = v.verify('task', 'answer [[ACCEPT=0.5]]')       # exact tie: no decision, but P is still reported
+    verifier = verifiers.build_verifier(
+        'davi', RUNPOD_ENV, transport=runpod_transport(bodies)
+    )
+    assert isinstance(verifier, verifiers.DaviRunPodVerifier)
+    verdict = verifier.verify('task', 'answer [[ACCEPT=0.8]]')
+    assert verdict.outcome == 'ok' and verdict.model == 'davi-0.2.0'
+    assert verdict.p_accept == pytest.approx(0.8)
+    assert verdict.cost_usd == pytest.approx(0.4 * 0.001)
+    question = bodies[0]['input']['questions'][QUESTION_ID]
+    assert set(question['criteria']) == {'opt_accept', 'opt_escalate'}
+    # an exact tie has no decision, but P is still reported
+    tie = verifier.verify('task', 'answer [[ACCEPT=0.5]]')
     assert tie.p_accept == pytest.approx(0.5)
 
 
 def test_clip_keeps_head_and_tail():
-    s = 'H' * 100 + 'M' * 1000 + 'T' * 100
-    c = V.clip(s, 300)
-    assert c.startswith('H') and c.endswith('T') and 'omitted' in c and len(c) < 400
-
-
-def test_options_precedence_override_then_plugin_option():
-    env = {'DAVI_ROUTE_ROUTE_THRESHOLD': '0.7', 'CLAUDE_PLUGIN_OPTION_ROUTE_THRESHOLD': '0.2',
-           'CLAUDE_PLUGIN_OPTION_ROUTE_JUDGE': 'jev'}
-    s = RH.load_settings(env)
-    assert s.route_threshold == 0.7 and s.route_judge == 'jev' and s.stop_judge == 'jev'
-    with pytest.raises(RH.ConfigError):
-        RH.load_settings({'DAVI_ROUTE_ROUTE_JUDGE': 'gpt'})
-
-
-# --- hooks: A (post), E (pre), B (stop) -----------------------------------------------------------------------------
-def agent_payload(event, model='haiku', result='[[ACCEPT=0.2]] wrong', session='s1', **kw):
-    p = {'session_id': session, 'hook_event_name': event, 'tool_name': 'Agent', 'transcript_path': '/nonexistent',
-         'tool_input': {'subagent_type': 'general-purpose', 'description': 'd', 'prompt': 'compute 17*23',
-                        **({'model': model} if model else {})}}
-    if event == 'PostToolUse':
-        p['tool_response'] = {'content': [{'type': 'text', 'text': result}], 'totalTokens': 10}
-    p.update(kw)
-    return p
-
-
-def settings(**kw):
-    env = {'DAVI_ROUTE_ROUTE_ENABLED': 'true', 'DAVI_ROUTE_STOP_VERIFY_ENABLED': 'true'}
-    env.update({f'DAVI_ROUTE_{k.upper()}': str(v) for k, v in kw.items()})
-    return RH.load_settings(env)
-
-
-def test_A_post_escalates_and_E_pre_applies_the_strong_model_once(tmp_path):
-    st, s, ver = RH.State(str(tmp_path)), settings(), V.FakeVerifier()
-    out, rec = RH.process_post(agent_payload('PostToolUse'), s, ver, st)
-    ctx = out['hookSpecificOutput']['additionalContext']
-    assert out['hookSpecificOutput']['hookEventName'] == 'PostToolUse' and 'model "opus"' in ctx
-    assert rec['decision'] == 'escalate' and rec['next_model'] == 'opus' and rec['p_accept'] == 0.2
-    assert ver.calls[0]['task'] == 'compute 17*23' and ver.calls[0]['candidate'].startswith('[[ACCEPT=0.2]]')
-    out, rec = RH.process_pre(agent_payload('PreToolUse', model='haiku'), s, st)       # the re-run
-    assert out['hookSpecificOutput']['updatedInput']['model'] == 'opus' and rec['source'] == 'escalation'
-    assert out['hookSpecificOutput']['updatedInput']['prompt'] == 'compute 17*23'
-    out, rec = RH.process_pre(agent_payload('PreToolUse', model='sonnet'), s, st)      # pending was one-shot
-    assert out['hookSpecificOutput']['updatedInput']['model'] == 'haiku' and rec['source'] == 'pin_cheap'
-
-
-def test_A_post_accepts_and_never_escalates_the_strong_model(tmp_path):
-    st, s = RH.State(str(tmp_path)), settings()
-    assert RH.process_post(agent_payload('PostToolUse', result='[[ACCEPT=0.9]] ok'), s, V.FakeVerifier(), st)[0] \
-        is None
-    out, rec = RH.process_post(agent_payload('PostToolUse', model='opus'), s, V.FakeVerifier(), st)
-    assert out is None and rec['reason'] == 'already_strong'
-    out, _ = RH.process_post(agent_payload('PostToolUse'), settings(route_post_mode='block'), V.FakeVerifier(), st)
-    assert out['decision'] == 'block' and 'opus' in out['reason']
-    out, rec = RH.process_post(agent_payload('PostToolUse', result='FAKE:ERROR'), s, V.FakeVerifier(), st)
-    assert out is None and rec['status'] == 'verifier_failed'                         # fail-open
-
-
-def test_E_pin_modes(tmp_path):
-    st = RH.State(str(tmp_path))
-    out, _ = RH.process_pre(agent_payload('PreToolUse', model=None), settings(route_pin_cheap='if_unset'), st)
-    assert out['hookSpecificOutput']['updatedInput']['model'] == 'haiku'
-    out, rec = RH.process_pre(agent_payload('PreToolUse', model='sonnet'), settings(route_pin_cheap='if_unset'), st)
-    assert out is None and rec['status'] == 'unchanged'
-    out, rec = RH.process_pre(agent_payload('PreToolUse', model='haiku'), settings(), st)
-    assert out is None and rec['changed'] is False
-
-
-def test_pre_mode_routes_from_the_task_alone_and_skips_the_answer_check(tmp_path):
-    st, s = RH.State(str(tmp_path)), settings(route_mode='pre', route_pre_threshold=0.5)
-    ver = V.FakeVerifier()
-    hard = agent_payload('PreToolUse', model='sonnet')
-    hard['tool_input']['prompt'] = 'prove it [[ACCEPT=0.2]]'
-    out, rec = RH.process_pre(hard, s, st, ver)
-    assert out['hookSpecificOutput']['updatedInput']['model'] == 'opus' and rec['source'] == 'pre_route'
-    assert rec['decision'] == 'escalate' and ver.calls[-1]['kind'] == 'pre' and ver.calls[-1]['candidate'] is None
-    easy = agent_payload('PreToolUse', model='sonnet')
-    easy['tool_input']['prompt'] = 'add 2 and 2 [[ACCEPT=0.9]]'
-    out, rec = RH.process_pre(easy, s, st, ver)
-    assert out['hookSpecificOutput']['updatedInput']['model'] == 'haiku' and rec['decision'] == 'accept'
-    failed = agent_payload('PreToolUse', model='sonnet')
-    failed['tool_input']['prompt'] = 'FAKE:ERROR'
-    out, rec = RH.process_pre(failed, s, st, ver)                                       # fail-open: cheap model
-    assert out['hookSpecificOutput']['updatedInput']['model'] == 'haiku' and rec['status'] == 'verifier_failed'
-    out, rec = RH.process_post(agent_payload('PostToolUse'), s, ver, st)               # pre mode: no answer check
-    assert out is None and rec['status'] == 'mode_pre'
-    out, rec = RH.process_pre(agent_payload('PreToolUse'), settings(), st, ver)        # post mode: pin, no call
-    assert rec['source'] == 'pin_cheap' and len(ver.calls) == 3
-
-
-def test_both_mode_checks_only_what_went_to_the_cheap_model(tmp_path):
-    st, s, ver = RH.State(str(tmp_path)), settings(route_mode='both'), V.FakeVerifier()
-    out, rec = RH.process_post(agent_payload('PostToolUse', model='haiku'), s, ver, st)
-    assert rec['decision'] == 'escalate' and len(ver.calls) == 1
-    out, rec = RH.process_pre(agent_payload('PreToolUse', model='haiku'), s, st, ver)  # the pending re-run wins
-    assert out['hookSpecificOutput']['updatedInput']['model'] == 'opus' and rec['source'] == 'escalation'
-    strong = agent_payload('PostToolUse', model='opus')
-    strong['tool_response']['resolvedModel'] = 'claude-opus-5-5'
-    out, rec = RH.process_post(strong, s, ver, st)
-    assert out is None and rec['reason'] == 'already_strong' and len(ver.calls) == 1   # no second verifier call
-    with pytest.raises(RH.ConfigError):
-        settings(route_mode='sometimes')
+    text = 'H' * 100 + 'M' * 1000 + 'T' * 100
+    clipped = clip(text, 300)
+    assert clipped.startswith('H') and clipped.endswith('T')
+    assert 'omitted' in clipped and len(clipped) < 400
 
 
 def test_tier_kind_on_systemone_claude_and_runpod():
-    def davi(req):
-        q = json.loads(req.content)['questions']['route']
-        assert q['type'] == 'choice' and list(q['criteria']) == ['1', '2', '3', '4', '5']
-        return httpx.Response(200, json={'answers': {'route': {'probabilities': {
-            '1': 0.0, '2': 0.0, '3': 0.5, '4': 0.5, '5': 0.0}}}})
-    r = V.build_verifier('davi', {'DAVI_BASE_URL': 'http://davi.test'}, transport=httpx.MockTransport(davi)) \
-        .verify('Who wrote Hamlet?', kind='tier')
-    assert r.outcome == 'ok' and r.level == pytest.approx(0.625) and r.p_accept == pytest.approx(0.375)
+    def davi(request):
+        question = json.loads(request.content)['questions']['route']
+        assert question['type'] == 'choice'
+        assert list(question['criteria']) == ['1', '2', '3', '4', '5']
+        return httpx.Response(
+            200,
+            json={
+                'answers': {
+                    'route': {
+                        'probabilities': {
+                            '1': 0.0,
+                            '2': 0.0,
+                            '3': 0.5,
+                            '4': 0.5,
+                            '5': 0.0,
+                        },
+                    }
+                }
+            },
+        )
+
+    env = {'DAVI_BASE_URL': 'http://davi.test'}
+    verifier = verifiers.build_verifier(
+        'davi', env, transport=httpx.MockTransport(davi)
+    )
+    verdict = verifier.verify('Who wrote Hamlet?', kind='tier')
+    assert verdict.outcome == 'ok'
+    assert verdict.level == pytest.approx(0.625)
+    assert verdict.p_accept == pytest.approx(0.375)
     seen = []
-    c = V.ClaudeVerifier(lambda: KEY, model='claude-haiku-5-5',
-                         transport=claude_transport(seen, 'Probably hard for it.\n\n4')).verify('q', kind='tier')
-    assert c.level == pytest.approx(0.75) and '1 to 5' in json.loads(seen[0].content)['messages'][0]['content']
-    env = {'DAVI_ROUTE_RUNPOD_API_KEY': KEY, 'DAVI_ROUTE_CHOICE_ENDPOINT_ID': 'ep1', 'DAVI_ROUTE_USD_PER_SECOND': '0.001'}
-    assert V.build_verifier('davi', env, transport=davi_transport([])).verify('q', kind='tier').outcome == 'error'
+    claude = verifiers.ClaudeVerifier(
+        lambda: KEY,
+        model='claude-haiku-5-5',
+        transport=claude_transport(seen, 'Probably hard for it.\n\n4'),
+    )
+    assert claude.verify('q', kind='tier').level == pytest.approx(0.75)
+    prompt = json.loads(seen[0].content)['messages'][0]['content']
+    assert '1 to 5' in prompt
+    runpod = verifiers.build_verifier(
+        'davi', RUNPOD_ENV, transport=runpod_transport([])
+    )
+    assert runpod.verify('q', kind='tier').outcome == 'error'
 
 
-def test_tiers_mode_picks_one_of_three_models_and_checks_only_the_cheap_one(tmp_path):
-    st, ver = RH.State(str(tmp_path)), V.FakeVerifier()
-    s = settings(route_mode='tiers', route_tier_low=0.4, route_tier_high=0.8)
+# --- hooks ------------------------------------------------------------------
+def agent_payload(
+    event,
+    model='haiku',
+    result='[[ACCEPT=0.2]] wrong',
+    session='s1',
+    **extra,
+):
+    tool_input = {
+        'subagent_type': 'general-purpose',
+        'description': 'd',
+        'prompt': 'compute 17*23',
+    }
+    if model:
+        tool_input['model'] = model
+    payload = {
+        'session_id': session,
+        'hook_event_name': event,
+        'tool_name': 'Agent',
+        'transcript_path': '/nonexistent',
+        'tool_input': tool_input,
+    }
+    if event == 'PostToolUse':
+        payload['tool_response'] = {
+            'content': [{'type': 'text', 'text': result}],
+            'totalTokens': 10,
+        }
+    payload.update(extra)
+    return payload
 
-    def pre(p_easy):
-        pl = agent_payload('PreToolUse', model='sonnet')
-        pl['tool_input']['prompt'] = f'task [[ACCEPT={p_easy}]]'          # fake: level = 1 - p
-        return RH.process_pre(pl, s, st, ver)
-    for p_easy, model, tier in ((0.9, 'haiku', 'cheap'), (0.5, 'sonnet', 'mid'), (0.1, 'opus', 'strong')):
-        out, rec = pre(p_easy)
-        assert rec['tier'] == tier and rec['source'] == 'tier_route' and ver.calls[-1]['kind'] == 'tier'
-        assert (out or {}).get('hookSpecificOutput', {}).get('updatedInput', {}).get('model', 'sonnet') == model
-    out, rec = RH.process_post(agent_payload('PostToolUse', model='haiku'), s, ver, st)
-    assert out is None and rec['status'] == 'mode_tiers'                         # no check unless asked
+
+def settings(**options):
+    env = {
+        'DAVI_ROUTE_ROUTE_ENABLED': 'true',
+        'DAVI_ROUTE_STOP_VERIFY_ENABLED': 'true',
+    }
+    env.update(
+        {
+            f'DAVI_ROUTE_{key.upper()}': str(value)
+            for key, value in options.items()
+        }
+    )
+    return Settings.from_env(env)
+
+
+def run_pre(payload, config, state, verifier=None):
+    return AgentPreHook(config, state, verifier).handle(payload)
+
+
+def run_post(payload, config, verifier, state):
+    return AgentPostHook(config, state, verifier).handle(payload)
+
+
+def run_stop(payload, config, verifier, state):
+    return StopHook(config, state, verifier).handle(payload)
+
+
+def updated_model(output, default=None):
+    hook_output = (output or {}).get('hookSpecificOutput', {})
+    return hook_output.get('updatedInput', {}).get('model', default)
+
+
+def test_hooks_share_one_abstract_interface():
+    with pytest.raises(TypeError):
+        route_hooks.RouteHook(settings(), None)
+    for cls in route_hooks.HOOK_CLASSES.values():
+        assert issubclass(cls, route_hooks.RouteHook)
+
+
+def test_post_escalates_and_pre_applies_the_strong_model_once(tmp_path):
+    state, config = State(str(tmp_path)), settings()
+    verifier = FakeVerifier()
+    output, record = run_post(
+        agent_payload('PostToolUse'), config, verifier, state
+    )
+    hook_output = output['hookSpecificOutput']
+    assert hook_output['hookEventName'] == 'PostToolUse'
+    assert 'model "opus"' in hook_output['additionalContext']
+    assert record['decision'] == 'escalate'
+    assert record['next_model'] == 'opus' and record['p_accept'] == 0.2
+    assert verifier.calls[0]['task'] == 'compute 17*23'
+    assert verifier.calls[0]['candidate'].startswith('[[ACCEPT=0.2]]')
+    # the re-run
+    output, record = run_pre(
+        agent_payload('PreToolUse', model='haiku'), config, state
+    )
+    assert updated_model(output) == 'opus'
+    assert record['source'] == 'escalation'
+    assert output['hookSpecificOutput']['updatedInput']['prompt'] == (
+        'compute 17*23'
+    )
+    # the pending escalation was one-shot
+    output, record = run_pre(
+        agent_payload('PreToolUse', model='sonnet'), config, state
+    )
+    assert updated_model(output) == 'haiku'
+    assert record['source'] == 'pin_cheap'
+
+
+def test_post_accepts_and_never_escalates_the_strong_model(tmp_path):
+    state, config = State(str(tmp_path)), settings()
+    good = agent_payload('PostToolUse', result='[[ACCEPT=0.9]] ok')
+    assert run_post(good, config, FakeVerifier(), state)[0] is None
+    output, record = run_post(
+        agent_payload('PostToolUse', model='opus'),
+        config,
+        FakeVerifier(),
+        state,
+    )
+    assert output is None and record['reason'] == 'already_strong'
+    output, _ = run_post(
+        agent_payload('PostToolUse'),
+        settings(route_post_mode='block'),
+        FakeVerifier(),
+        state,
+    )
+    assert output['decision'] == 'block' and 'opus' in output['reason']
+    failed = agent_payload('PostToolUse', result='FAKE:ERROR')
+    output, record = run_post(failed, config, FakeVerifier(), state)
+    assert output is None and record['status'] == 'verifier_failed'
+
+
+def test_pin_modes(tmp_path):
+    state = State(str(tmp_path))
+    if_unset = settings(route_pin_cheap='if_unset')
+    output, _ = run_pre(
+        agent_payload('PreToolUse', model=None), if_unset, state
+    )
+    assert updated_model(output) == 'haiku'
+    output, record = run_pre(
+        agent_payload('PreToolUse', model='sonnet'), if_unset, state
+    )
+    assert output is None and record['status'] == 'unchanged'
+    output, record = run_pre(
+        agent_payload('PreToolUse', model='haiku'), settings(), state
+    )
+    assert output is None and record['changed'] is False
+
+
+def with_prompt(prompt, model='sonnet'):
+    payload = agent_payload('PreToolUse', model=model)
+    payload['tool_input']['prompt'] = prompt
+    return payload
+
+
+def test_pre_mode_routes_from_the_task_alone(tmp_path):
+    state = State(str(tmp_path))
+    config = settings(route_mode='pre', route_pre_threshold=0.5)
+    verifier = FakeVerifier()
+    output, record = run_pre(
+        with_prompt('prove it [[ACCEPT=0.2]]'), config, state, verifier
+    )
+    assert updated_model(output) == 'opus'
+    assert record['source'] == 'pre_route'
+    assert record['decision'] == 'escalate'
+    assert verifier.calls[-1]['kind'] == 'pre'
+    assert verifier.calls[-1]['candidate'] is None
+    output, record = run_pre(
+        with_prompt('add 2 and 2 [[ACCEPT=0.9]]'), config, state, verifier
+    )
+    assert updated_model(output) == 'haiku'
+    assert record['decision'] == 'accept'
+    # fail-open: the cheap model
+    output, record = run_pre(
+        with_prompt('FAKE:ERROR'), config, state, verifier
+    )
+    assert updated_model(output) == 'haiku'
+    assert record['status'] == 'verifier_failed'
+    # pre mode: no answer check
+    output, record = run_post(
+        agent_payload('PostToolUse'), config, verifier, state
+    )
+    assert output is None and record['status'] == 'mode_pre'
+    # post mode: pin the cheap model without a verifier call
+    output, record = run_pre(
+        agent_payload('PreToolUse'), settings(), state, verifier
+    )
+    assert record['source'] == 'pin_cheap' and len(verifier.calls) == 3
+
+
+def test_both_mode_checks_only_what_went_to_the_cheap_model(tmp_path):
+    state, config = State(str(tmp_path)), settings(route_mode='both')
+    verifier = FakeVerifier()
+    output, record = run_post(
+        agent_payload('PostToolUse', model='haiku'), config, verifier, state
+    )
+    assert record['decision'] == 'escalate' and len(verifier.calls) == 1
+    # the pending re-run wins
+    output, record = run_pre(
+        agent_payload('PreToolUse', model='haiku'), config, state, verifier
+    )
+    assert updated_model(output) == 'opus'
+    assert record['source'] == 'escalation'
+    strong = agent_payload('PostToolUse', model='opus')
+    strong['tool_response']['resolvedModel'] = 'claude-opus-5-5'
+    output, record = run_post(strong, config, verifier, state)
+    assert output is None and record['reason'] == 'already_strong'
+    assert len(verifier.calls) == 1  # no second verifier call
+    with pytest.raises(ConfigError):
+        settings(route_mode='sometimes')
+
+
+def test_tiers_mode_picks_one_of_three_models(tmp_path):
+    state, verifier = State(str(tmp_path)), FakeVerifier()
+    config = settings(
+        route_mode='tiers', route_tier_low=0.4, route_tier_high=0.8
+    )
+    cases = (
+        (0.9, 'haiku', 'cheap'),
+        (0.5, 'sonnet', 'mid'),
+        (0.1, 'opus', 'strong'),
+    )
+    for p_easy, model, tier in cases:
+        # fake verifier: level = 1 - p
+        output, record = run_pre(
+            with_prompt(f'task [[ACCEPT={p_easy}]]'),
+            config,
+            state,
+            verifier,
+        )
+        assert record['tier'] == tier and record['source'] == 'tier_route'
+        assert verifier.calls[-1]['kind'] == 'tier'
+        assert updated_model(output, 'sonnet') == model
+    output, record = run_post(
+        agent_payload('PostToolUse', model='haiku'), config, verifier, state
+    )
+    assert output is None and record['status'] == 'mode_tiers'
     checked = settings(route_mode='tiers', route_tier_check='true')
-    out, rec = RH.process_post(agent_payload('PostToolUse', model='haiku'), checked, ver, st)
-    assert rec['decision'] == 'escalate'
-    out, rec = RH.process_post(agent_payload('PostToolUse', model='sonnet'), checked, ver, st)
-    assert out is None and rec['reason'] == 'not_cheap'
-    with pytest.raises(RH.ConfigError):
+    output, record = run_post(
+        agent_payload('PostToolUse', model='haiku'),
+        checked,
+        verifier,
+        state,
+    )
+    assert record['decision'] == 'escalate'
+    output, record = run_post(
+        agent_payload('PostToolUse', model='sonnet'),
+        checked,
+        verifier,
+        state,
+    )
+    assert output is None and record['reason'] == 'not_cheap'
+    with pytest.raises(ConfigError):
         settings(route_mode='tiers', route_tier_low=0.9, route_tier_high=0.2)
 
 
-def test_harness_pre_judging_and_its_cost(tmp_path):
-    tasks, cache = build_cache(tmp_path)
-    marked = [Hn.Task(t.id, t.prompt + (' [[ACCEPT=0.9]]' if int(t.id[1:]) % 2 == 0 else ' [[ACCEPT=0.1]]'))
-              for t in tasks]
-    Hn.judge(marked, cache, 'cheap', ['fake'], kind='pre', verifier_factory=lambda n: V.FakeVerifier(),
-             log=lambda *a: None)
-    rows, judges = Hn.demo_rows(cache, 'cheap', 'strong')
-    assert judges == ['fake', 'fake:pre']
-    odd = next(r for r in rows if r['id'] == 't3')
-    assert odd['judges']['fake:pre']['route'] == 'escalate'
-    assert odd['judges']['fake:pre']['cost'] == pytest.approx(0.10)              # strong only: haiku never ran
-    assert odd['judges']['fake']['cost'] == pytest.approx(0.01 + 0.0001 + 0.10)
-    rep = Hn.analyze(cache, 'cheap', 'strong', calib_frac=0.5, seed=1)
-    assert rep['judges']['fake:pre']['baselines']['always_strong']['accuracy'] == 1.0
+def write_transcript(
+    path,
+    user='Fix the failing test in foo.py',
+    assistant='Done, all tests pass.',
+):
+    def message(role, content):
+        return {'type': role, 'message': {'role': role, 'content': content}}
 
-
-def write_transcript(path, user='Fix the failing test in foo.py', assistant='Done, all tests pass.'):
-    lines = [{'type': 'user', 'message': {'role': 'user', 'content': user}},
-             {'type': 'assistant', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'working'}]}},
-             {'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'tool_result', 'content': 'x'}]}},
-             {'type': 'assistant', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': assistant}]}}]
-    path.write_text('\n'.join(json.dumps(x) for x in lines) + '\n', encoding='utf-8')
+    lines = [
+        message('user', user),
+        message('assistant', [{'type': 'text', 'text': 'working'}]),
+        message('user', [{'type': 'tool_result', 'content': 'x'}]),
+        message('assistant', [{'type': 'text', 'text': assistant}]),
+    ]
+    text = '\n'.join(json.dumps(line) for line in lines) + '\n'
+    path.write_text(text, encoding='utf-8')
     return str(path)
 
 
 def test_transcript_reader_skips_tool_results():
-    import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        p = write_transcript(Path(d) / 't.jsonl')
-        assert RH.transcript_messages(p) == ('Fix the failing test in foo.py', 'Done, all tests pass.')
-    assert RH.transcript_messages('/nonexistent') == (None, None)
+    with tempfile.TemporaryDirectory() as directory:
+        path = write_transcript(Path(directory) / 't.jsonl')
+        assert route_hooks.transcript_messages(path) == (
+            'Fix the failing test in foo.py',
+            'Done, all tests pass.',
+        )
+    assert route_hooks.transcript_messages('/nonexistent') == (None, None)
 
 
-def stop_payload(tpath, last='Done [[ACCEPT=0.1]]', active=False, session='s2'):
-    return {'session_id': session, 'hook_event_name': 'Stop', 'transcript_path': tpath, 'stop_hook_active': active,
-            'last_assistant_message': last}
+def stop_payload(
+    transcript,
+    last='Done [[ACCEPT=0.1]]',
+    active=False,
+    session='s2',
+):
+    return {
+        'session_id': session,
+        'hook_event_name': 'Stop',
+        'transcript_path': transcript,
+        'stop_hook_active': active,
+        'last_assistant_message': last,
+    }
 
 
-def test_B_stop_blocks_once_then_allows(tmp_path):
-    st, s, ver = RH.State(str(tmp_path / 'st')), settings(), V.FakeVerifier()
-    tp = write_transcript(tmp_path / 't.jsonl')
-    out, rec = RH.process_stop(stop_payload(tp), s, ver, st)
-    assert out['decision'] == 'block' and 'P(complete)=0.1' in out['reason'] and rec['p_accept'] == 0.1
-    assert ver.calls[0]['kind'] == 'completion' and ver.calls[0]['task'] == 'Fix the failing test in foo.py'
-    out, rec = RH.process_stop(stop_payload(tp, active=True), s, ver, st)
-    assert out is None and rec['status'] == 'max_blocks' and len(ver.calls) == 1
+def test_stop_blocks_once_then_allows(tmp_path):
+    state, config = State(str(tmp_path / 'st')), settings()
+    verifier = FakeVerifier()
+    transcript = write_transcript(tmp_path / 't.jsonl')
+    output, record = run_stop(
+        stop_payload(transcript), config, verifier, state
+    )
+    assert output['decision'] == 'block'
+    assert 'P(complete)=0.1' in output['reason']
+    assert record['p_accept'] == 0.1
+    assert verifier.calls[0]['kind'] == 'completion'
+    assert verifier.calls[0]['task'] == 'Fix the failing test in foo.py'
+    output, record = run_stop(
+        stop_payload(transcript, active=True), config, verifier, state
+    )
+    assert output is None and record['status'] == 'max_blocks'
+    assert len(verifier.calls) == 1
 
 
-def test_B_chain_guard_when_the_block_reason_becomes_a_user_message(tmp_path):
-    st, s = RH.State(str(tmp_path / 'st')), settings()
-    RH.process_stop(stop_payload(write_transcript(tmp_path / 'a.jsonl')), s, V.FakeVerifier(), st)
-    tp2 = write_transcript(tmp_path / 'b.jsonl', user='[davi-verify] An automated completion check ...')
-    out, rec = RH.process_stop(stop_payload(tp2, active=True), s, V.FakeVerifier(), st)
-    assert out is None and rec['status'] == 'max_blocks'
-    out, _ = RH.process_stop(stop_payload(tp2, active=False), s, V.FakeVerifier(), st)   # a new user turn
-    assert out is not None
+def test_stop_chain_guard_when_the_reason_becomes_a_user_message(tmp_path):
+    state, config = State(str(tmp_path / 'st')), settings()
+    first = write_transcript(tmp_path / 'a.jsonl')
+    run_stop(stop_payload(first), config, FakeVerifier(), state)
+    second = write_transcript(
+        tmp_path / 'b.jsonl',
+        user='[davi-verify] An automated completion check ...',
+    )
+    output, record = run_stop(
+        stop_payload(second, active=True), config, FakeVerifier(), state
+    )
+    assert output is None and record['status'] == 'max_blocks'
+    # a new user turn
+    output, _ = run_stop(
+        stop_payload(second, active=False), config, FakeVerifier(), state
+    )
+    assert output is not None
 
 
-def test_B_allows_complete_tasks_and_fails_open(tmp_path):
-    st, s = RH.State(str(tmp_path / 'st')), settings()
-    tp = write_transcript(tmp_path / 't.jsonl')
-    assert RH.process_stop(stop_payload(tp, last='done [[ACCEPT=0.9]]'), s, V.FakeVerifier(), st)[0] is None
-    out, rec = RH.process_stop(stop_payload(tp, last='FAKE:ERROR'), s, V.FakeVerifier(), st)
-    assert out is None and rec['decision'] == 'allow'
+def test_stop_allows_complete_tasks_and_fails_open(tmp_path):
+    state, config = State(str(tmp_path / 'st')), settings()
+    transcript = write_transcript(tmp_path / 't.jsonl')
+    done = stop_payload(transcript, last='done [[ACCEPT=0.9]]')
+    assert run_stop(done, config, FakeVerifier(), state)[0] is None
+    failed = stop_payload(transcript, last='FAKE:ERROR')
+    output, record = run_stop(failed, config, FakeVerifier(), state)
+    assert output is None and record['decision'] == 'allow'
 
 
 def test_probe_modes(tmp_path):
-    st, s = RH.State(str(tmp_path)), settings(probe='true', probe_nonce='N1', probe_pre_model='haiku')
-    out, rec = RH.process_post(agent_payload('PostToolUse'), s, None, st)
-    assert 'DAVI-PROBE-A-N1' in out['hookSpecificOutput']['additionalContext'] and rec['tool_response_shape']
-    out, rec = RH.process_pre(agent_payload('PreToolUse', model='opus'), s, st)
-    assert out['hookSpecificOutput']['updatedInput']['model'] == 'haiku' and rec['model_requested'] == 'opus'
-    tp = write_transcript(tmp_path / 't.jsonl')
-    out, _ = RH.process_stop(stop_payload(tp), s, None, st)
-    assert 'DAVI-PROBE-B-N1' in out['reason']
-    out, rec = RH.process_stop(stop_payload(tp, active=True), s, None, st)
-    assert out is None and rec['decision'] == 'allow'
+    state = State(str(tmp_path))
+    config = settings(probe='true', probe_nonce='N1', probe_pre_model='haiku')
+    output, record = run_post(
+        agent_payload('PostToolUse'), config, None, state
+    )
+    context = output['hookSpecificOutput']['additionalContext']
+    assert 'DAVI-PROBE-A-N1' in context and record['tool_response_shape']
+    output, record = run_pre(
+        agent_payload('PreToolUse', model='opus'), config, state
+    )
+    assert updated_model(output) == 'haiku'
+    assert record['model_requested'] == 'opus'
+    transcript = write_transcript(tmp_path / 't.jsonl')
+    output, _ = run_stop(stop_payload(transcript), config, None, state)
+    assert 'DAVI-PROBE-B-N1' in output['reason']
+    output, record = run_stop(
+        stop_payload(transcript, active=True), config, None, state
+    )
+    assert output is None and record['decision'] == 'allow'
 
 
 def test_main_end_to_end_with_log(tmp_path):
     log = tmp_path / 'h.jsonl'
-    env = {'DAVI_ROUTE_ROUTE_ENABLED': 'true', 'DAVI_ROUTE_LOG_FILE': str(log), 'CLAUDE_PLUGIN_DATA': str(tmp_path)}
-    out, err = io.StringIO(), io.StringIO()
-    RH.main('post', stdin=io.StringIO(json.dumps(agent_payload('PostToolUse'))), stdout=out, stderr=err, env=env,
-            verifier=V.FakeVerifier())
-    assert json.loads(out.getvalue())['hookSpecificOutput']['additionalContext']
-    out2 = io.StringIO()
-    RH.main('pre', stdin=io.StringIO(json.dumps(agent_payload('PreToolUse'))), stdout=out2, stderr=io.StringIO(),
-            env=env)
-    assert json.loads(out2.getvalue())['hookSpecificOutput']['updatedInput']['model'] == 'opus'
-    summary = Hn.hooklog_summary(str(log))
+    env = {
+        'DAVI_ROUTE_ROUTE_ENABLED': 'true',
+        'DAVI_ROUTE_LOG_FILE': str(log),
+        'CLAUDE_PLUGIN_DATA': str(tmp_path),
+    }
+    out = io.StringIO()
+    route_hooks.main(
+        'post',
+        stdin=io.StringIO(json.dumps(agent_payload('PostToolUse'))),
+        stdout=out,
+        stderr=io.StringIO(),
+        env=env,
+        verifier=FakeVerifier(),
+    )
+    output = json.loads(out.getvalue())
+    assert output['hookSpecificOutput']['additionalContext']
+    out = io.StringIO()
+    route_hooks.main(
+        'pre',
+        stdin=io.StringIO(json.dumps(agent_payload('PreToolUse'))),
+        stdout=out,
+        stderr=io.StringIO(),
+        env=env,
+    )
+    assert updated_model(json.loads(out.getvalue())) == 'opus'
+    summary = harness.hooklog_summary(str(log))
     assert summary['by_kind']['post']['decision'] == {'escalate': 1}
-    assert summary['by_kind']['pre']['model_set'] == {'haiku -> opus (escalation)': 1}
+    assert summary['by_kind']['pre']['model_set'] == {
+        'haiku -> opus (escalation)': 1,
+    }
 
 
 def test_main_is_silent_when_off_or_other_tool_or_bad_config():
-    for env, payload in [({}, agent_payload('PostToolUse')),
-                         ({'DAVI_ROUTE_ROUTE_ENABLED': 'true'}, {**agent_payload('PostToolUse'), 'tool_name': 'Bash'}),
-                         ({'DAVI_ROUTE_ROUTE_ENABLED': 'true', 'DAVI_ROUTE_ROUTE_THRESHOLD': '7'},
-                          agent_payload('PostToolUse'))]:
+    on = {'DAVI_ROUTE_ROUTE_ENABLED': 'true'}
+    cases = [
+        ({}, agent_payload('PostToolUse')),
+        (on, {**agent_payload('PostToolUse'), 'tool_name': 'Bash'}),
+        (
+            {**on, 'DAVI_ROUTE_ROUTE_THRESHOLD': '7'},
+            agent_payload('PostToolUse'),
+        ),
+    ]
+    for env, payload in cases:
         out = io.StringIO()
-        RH.main('post', stdin=io.StringIO(json.dumps(payload)), stdout=out, stderr=io.StringIO(), env=env,
-                verifier=V.FakeVerifier())
+        route_hooks.main(
+            'post',
+            stdin=io.StringIO(json.dumps(payload)),
+            stdout=out,
+            stderr=io.StringIO(),
+            env=env,
+            verifier=FakeVerifier(),
+        )
         assert out.getvalue() == ''
 
 
 def run_launcher(kind, payload, env_extra, tmp_path):
-    env = {k: v for k, v in os.environ.items() if not k.startswith(('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_'))}
+    prefixes = ('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_')
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(prefixes)
+    }
     env.update({'CLAUDE_PLUGIN_DATA': str(tmp_path), **env_extra})
-    return subprocess.run([sys.executable, str(PLUGIN / 'hooks' / 'route_hook.py'), kind], input=json.dumps(payload),
-                          capture_output=True, text=True, env=env, timeout=60)
+    return subprocess.run(
+        [sys.executable, LAUNCHER, kind],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
 
 
 def test_launcher_fast_path_and_probe(tmp_path):
-    r = run_launcher('post', agent_payload('PostToolUse'), {}, tmp_path)
-    assert r.returncode == 0 and r.stdout == '' and r.stderr == ''
-    r = run_launcher('post', agent_payload('PostToolUse'), {'DAVI_ROUTE_PROBE': '1', 'DAVI_ROUTE_PROBE_NONCE': 'L'},
-                     tmp_path)
-    assert r.returncode == 0 and 'DAVI-PROBE-A-L' in json.loads(r.stdout)['hookSpecificOutput']['additionalContext']
-    r = run_launcher('post', agent_payload('PostToolUse'), {'DAVI_ROUTE_ROUTE_ENABLED': 'true',
-                                                            'DAVI_ROUTE_ROUTE_JUDGE': 'jev'}, tmp_path)
-    assert r.returncode == 0 and r.stdout == ''                                  # no key: fail-open, logged
-    assert json.loads(r.stderr.strip().splitlines()[-1])['outcome'] == 'local_config'
+    payload = agent_payload('PostToolUse')
+    result = run_launcher('post', payload, {}, tmp_path)
+    assert result.returncode == 0
+    assert result.stdout == '' and result.stderr == ''
+    probe_env = {'DAVI_ROUTE_PROBE': '1', 'DAVI_ROUTE_PROBE_NONCE': 'L'}
+    result = run_launcher('post', payload, probe_env, tmp_path)
+    context = json.loads(result.stdout)['hookSpecificOutput'][
+        'additionalContext'
+    ]
+    assert result.returncode == 0 and 'DAVI-PROBE-A-L' in context
+    jev_env = {
+        'DAVI_ROUTE_ROUTE_ENABLED': 'true',
+        'DAVI_ROUTE_ROUTE_JUDGE': 'jev',
+    }
+    result = run_launcher('post', payload, jev_env, tmp_path)
+    # no key: fail-open, logged
+    assert result.returncode == 0 and result.stdout == ''
+    last = json.loads(result.stderr.strip().splitlines()[-1])
+    assert last['outcome'] == 'local_config'
 
 
 def test_plugin_manifest_matches_settings():
-    plugin = json.loads((PLUGIN / '.claude-plugin' / 'plugin.json').read_text(encoding='utf-8'))
-    hooks = json.loads((PLUGIN / 'hooks' / 'hooks.json').read_text(encoding='utf-8'))['hooks']
+    manifest = PLUGIN / '.claude-plugin' / 'plugin.json'
+    plugin = json.loads(manifest.read_text(encoding='utf-8'))
+    hooks_file = PLUGIN / 'hooks' / 'hooks.json'
+    hooks = json.loads(hooks_file.read_text(encoding='utf-8'))['hooks']
     assert set(hooks) == {'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop'}
-    fields = {f for f in RH.Settings.__dataclass_fields__}
-    secrets_ = {'runpod_api_key', 'choice_endpoint_id', 'usd_per_second', 'typesafe_api_key', 'anthropic_api_key'}
-    cfg = plugin['userConfig']
-    assert set(cfg) <= fields | secrets_
-    assert all(cfg[k]['sensitive'] for k in secrets_ - {'usd_per_second'})
-    defaults = RH.Settings()
-    for k, spec in cfg.items():
-        if k in fields and 'default' in spec:
-            assert spec['default'] == getattr(defaults, k), k
-    for ev, entries in hooks.items():
-        for e in entries:
-            (h,) = e['hooks']
-            assert h['args'][0] == '${CLAUDE_PLUGIN_ROOT}/hooks/route_hook.py' and h['args'][1] in (
-                'pre', 'post', 'stop', 'subagent_stop')
-            assert h['timeout'] > defaults.wall_budget_seconds
+    fields = set(Settings.__dataclass_fields__)
+    secrets = {
+        'runpod_api_key',
+        'choice_endpoint_id',
+        'usd_per_second',
+        'typesafe_api_key',
+        'anthropic_api_key',
+    }
+    config = plugin['userConfig']
+    assert set(config) <= fields | secrets
+    sensitive = secrets - {'usd_per_second'}
+    assert all(config[key]['sensitive'] for key in sensitive)
+    defaults = Settings()
+    for key, spec in config.items():
+        if key in fields and 'default' in spec:
+            assert spec['default'] == getattr(defaults, key), key
+    for entries in hooks.values():
+        for entry in entries:
+            (hook,) = entry['hooks']
+            assert hook['args'][0] == LAUNCHER_ARG
+            assert hook['args'][1] in route_hooks.HOOK_KINDS
+            assert hook['timeout'] > defaults.wall_budget_seconds
 
 
-# --- harness (C) ----------------------------------------------------------------------------------------------------
+# --- grading ----------------------------------------------------------------
 def test_graders():
-    t = Hn.Task('a', 'q', answer='391', grader='number')
-    assert Hn.grade(t, 'The product is 391.')[0] is True and Hn.grade(t, '17*23=390')[0] is False
-    assert Hn.grade(Hn.Task('b', 'q', answer='Paris'), 'It is paris.')[0] is True
-    assert Hn.grade(Hn.Task('c', 'q', answer='^ok$', grader='regex'), 'OK')[0] is True
-    assert Hn.grade(Hn.Task('d', 'q'), 'anything') == (None, 'ungraded')
-    assert Hn.grade(Hn.Task('e', 'q', check_cmd='grep -q 42'), 'x 42 y')[0] is True
-    assert Hn.grade(Hn.Task('f', 'q', answer='x'), '   ')[0] is False
+    task = harness.Task('a', 'q', answer='391', grader='number')
+    assert grading.grade(task, 'The product is 391.')[0] is True
+    assert grading.grade(task, '17*23=390')[0] is False
+    paris = harness.Task('b', 'q', answer='Paris')
+    assert grading.grade(paris, 'It is paris.')[0] is True
+    regex = harness.Task('c', 'q', answer='^ok$', grader='regex')
+    assert grading.grade(regex, 'OK')[0] is True
+    ungraded = harness.Task('d', 'q')
+    assert grading.grade(ungraded, 'anything') == (None, 'ungraded')
+    command = harness.Task('e', 'q', check_cmd='grep -q 42')
+    assert grading.grade(command, 'x 42 y')[0] is True
+    assert grading.grade(harness.Task('f', 'q', answer='x'), '   ')[0] is False
 
 
 def test_graders_ignore_markdown_emphasis_and_read_korean_amounts():
-    choice = Hn.Task('a', 'q', answer=r'정답\s*[:：]\s*\(?B\b', grader='regex')
-    assert Hn.grade(choice, '풀이...\n정답: **B**')[0] is True
-    assert Hn.grade(choice, '정답: **C**')[0] is False
-    money = Hn.Task('b', 'q', answer='2130000000', grader='number')
-    assert Hn.grade(money, '정답: 21억 3,000만 원')[0] is True
-    assert Hn.grade(money, '정답: 21억 원')[0] is False
-    assert Hn.grade(Hn.Task('c', 'q', answer='2', grader='number'), '정답: **3**')[0] is False
-    assert Hn._last_ko_amount('약 1.5만 명') == 15000.0 and Hn._last_ko_amount('만약 그렇다면') is None
+    choice = harness.Task(
+        'a', 'q', answer=r'정답\s*[:：]\s*\(?B\b', grader='regex'
+    )
+    assert grading.grade(choice, '풀이...\n정답: **B**')[0] is True
+    assert grading.grade(choice, '정답: **C**')[0] is False
+    money = harness.Task('b', 'q', answer='2130000000', grader='number')
+    assert grading.grade(money, '정답: 21억 3,000만 원')[0] is True
+    assert grading.grade(money, '정답: 21억 원')[0] is False
+    two = harness.Task('c', 'q', answer='2', grader='number')
+    assert grading.grade(two, '정답: **3**')[0] is False
+    assert grading.last_korean_amount('약 1.5만 명') == 15000.0
+    assert grading.last_korean_amount('만약 그렇다면') is None
 
 
+def test_grader_classes():
+    assert isinstance(grading.grader_for('number'), grading.ReferenceGrader)
+    assert isinstance(grading.grader_for('none'), grading.NoGrader)
+    with pytest.raises(TypeError):
+        grading.ReferenceGrader()
+
+
+def test_llm_grader_reads_the_last_yes_or_no():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        text = 'The reference says yes but the response differs.\n\nno'
+        return httpx.Response(
+            200,
+            json={
+                'content': [{'type': 'text', 'text': text}],
+            },
+        )
+
+    task = harness.Task('a', 'q', answer='391', grader='llm')
+    env = {'ANTHROPIC_API_KEY': 'sk-test-0000000000'}
+    result = grading.grade(
+        task, '390', env=env, transport=httpx.MockTransport(handler)
+    )
+    assert result == (False, 'llm:no')
+    assert seen[0]['model'] == grading.GRADER_DEFAULT_MODEL
+    correct, detail = grading.grade(task, '391', env={})
+    assert correct is None and detail.startswith('llm grader error')
+
+
+# --- harness ----------------------------------------------------------------
 def test_claude_cmd_and_result_parsing():
-    arm = Hn.parse_arm('plug=sonnet:--plugin-dir plugins/davi-route')
-    cmd = Hn.claude_cmd(Hn.Task('a', 'hello'), arm, max_turns=3, budget_usd=0.5, session_id='u')
-    assert cmd[:4] == ['claude', '-p', 'hello', '--model'] and cmd[4] == 'sonnet'
-    assert cmd[-2:] == ['--plugin-dir', 'plugins/davi-route'] and '--max-budget-usd' in cmd and 'u' in cmd
-    js = Hn.parse_result('noise\n{"type":"result","result":"OK","total_cost_usd":0.01}\n')
-    assert js['result'] == 'OK'
-    assert 'CLAUDE_CODE_SESSION_ID' not in Hn.child_env(arm, {'CLAUDE_CODE_SESSION_ID': 'x', 'A': '1'})
+    arm = harness.parse_arm('plug=sonnet:--plugin-dir plugins/davi-route')
+    command = harness.claude_cmd(
+        harness.Task('a', 'hello'),
+        arm,
+        max_turns=3,
+        budget_usd=0.5,
+        session_id='u',
+    )
+    assert command[:5] == ['claude', '-p', 'hello', '--model', 'sonnet']
+    assert command[-2:] == ['--plugin-dir', 'plugins/davi-route']
+    assert '--max-budget-usd' in command and 'u' in command
+    result = harness.parse_result(
+        'noise\n{"type":"result","result":"OK","total_cost_usd":0.01}\n'
+    )
+    assert result['result'] == 'OK'
+    env = harness.child_env(arm, {'CLAUDE_CODE_SESSION_ID': 'x', 'A': '1'})
+    assert 'CLAUDE_CODE_SESSION_ID' not in env
 
 
 def fake_runner(answers):
-    """answers: (task_id, model) -> (text, cost)."""
-    def run(cmd, env, cwd, timeout):
-        tid = env['T_ID'] if 'T_ID' in env else None
-        prompt, model = cmd[2], cmd[cmd.index('--model') + 1]
+    """answers: (prompt, model) -> (text, cost)."""
+
+    def run(command, env, cwd, timeout):
+        prompt = command[2]
+        model = command[command.index('--model') + 1]
         text, cost = answers[(prompt, model)]
-        return {'exit_code': 0, 'wall_s': 1.0, 'result': text, 'is_error': False, 'total_cost_usd': cost,
-                'duration_ms': 1000, 'num_turns': 1, 'session_id': 's', 'model_usage': {model: {'costUSD': cost}},
-                'subagents': None, 'permission_denials': 0, 'stderr_tail': tid}
+        return {
+            'exit_code': 0,
+            'wall_s': 1.0,
+            'result': text,
+            'is_error': False,
+            'total_cost_usd': cost,
+            'duration_ms': 1000,
+            'num_turns': 1,
+            'session_id': 's',
+            'model_usage': {model: {'costUSD': cost}},
+            'subagents': None,
+            'permission_denials': 0,
+            'stderr_tail': None,
+        }
+
     return run
 
 
 def build_cache(tmp_path, n=40):
-    """Cheap answers correct on even ids; strong always correct. Fake P(accept) ranks perfectly except one case."""
+    """Cheap answers are correct on even ids, strong ones always. The fake
+    P(accept) ranks perfectly except for one confidently wrong answer."""
     tasks, answers = [], {}
     for i in range(n):
-        t = Hn.Task(f't{i}', f'q{i}', answer='yes')
-        tasks.append(t)
+        task = harness.Task(f't{i}', f'q{i}', answer='yes')
+        tasks.append(task)
         cheap_ok = i % 2 == 0
         p = 0.9 if cheap_ok else 0.1
         if i == 1:
-            p = 0.95                                              # one confidently wrong cheap answer
-        answers[(t.prompt, 'haiku')] = (('yes' if cheap_ok else 'no') + f' [[ACCEPT={p}]]', 0.01)
-        answers[(t.prompt, 'opus')] = ('yes', 0.10)
+            p = 0.95
+        text = ('yes' if cheap_ok else 'no') + f' [[ACCEPT={p}]]'
+        answers[(task.prompt, 'haiku')] = (text, 0.01)
+        answers[(task.prompt, 'opus')] = ('yes', 0.10)
     cache = str(tmp_path / 'cache')
-    arms = [Hn.Arm('cheap', 'haiku'), Hn.Arm('strong', 'opus')]
-    Hn.generate(tasks, arms, cache, workers=1, runner=fake_runner(answers), log=lambda *a: None)
-    Hn.generate(tasks, arms, cache, workers=1, runner=None, log=lambda *a: None)          # all cached: no runner call
-    Hn.judge(tasks, cache, 'cheap', ['fake'], verifier_factory=lambda n: V.FakeVerifier(cost_usd=0.0001),
-             log=lambda *a: None)
+    arms = [harness.Arm('cheap', 'haiku'), harness.Arm('strong', 'opus')]
+    harness.generate(
+        tasks, arms, cache, workers=1, runner=fake_runner(answers), log=quiet
+    )
+    # all cached: the runner is not called again
+    harness.generate(tasks, arms, cache, workers=1, runner=None, log=quiet)
+    harness.judge(
+        tasks,
+        cache,
+        'cheap',
+        ['fake'],
+        log=quiet,
+        verifier_factory=lambda name: FakeVerifier(cost_usd=0.0001),
+    )
     return tasks, cache
 
 
+def test_run_cache_keeps_the_newest_record(tmp_path):
+    store = harness.RunCache(str(tmp_path))
+    store.add_run({'task_id': 'a', 'arm': 'x', 'correct': False})
+    store.add_run({'task_id': 'a', 'arm': 'x', 'correct': True})
+    assert store.runs() == {
+        ('a', 'x'): {'task_id': 'a', 'arm': 'x', 'correct': True},
+    }
+    assert store.judgments() == {}
+
+
+def test_pre_judging_and_its_cost(tmp_path):
+    tasks, cache = build_cache(tmp_path)
+    marked = [
+        harness.Task(
+            task.id,
+            task.prompt
+            + (
+                ' [[ACCEPT=0.9]]'
+                if int(task.id[1:]) % 2 == 0
+                else ' [[ACCEPT=0.1]]'
+            ),
+        )
+        for task in tasks
+    ]
+    harness.judge(
+        marked,
+        cache,
+        'cheap',
+        ['fake'],
+        kind='pre',
+        log=quiet,
+        verifier_factory=lambda name: FakeVerifier(),
+    )
+    rows, judges = analysis.demo_rows(cache, 'cheap', 'strong')
+    assert judges == ['fake', 'fake:pre']
+    odd = next(row for row in rows if row['id'] == 't3')
+    assert odd['judges']['fake:pre']['route'] == 'escalate'
+    # strong only: the cheap model never ran
+    assert odd['judges']['fake:pre']['cost'] == pytest.approx(0.10)
+    expected = 0.01 + 0.0001 + 0.10
+    assert odd['judges']['fake']['cost'] == pytest.approx(expected)
+    report = analysis.analyze(cache, 'cheap', 'strong', calib_frac=0.5, seed=1)
+    pre = report['judges']['fake:pre']
+    assert pre['baselines']['always_strong']['accuracy'] == 1.0
+
+
+# --- analysis ---------------------------------------------------------------
 def test_analyze_baselines_auroc_and_frozen_threshold(tmp_path):
     _, cache = build_cache(tmp_path)
-    rep = Hn.analyze(cache, 'cheap', 'strong', calib_frac=0.5, seed=1, tolerance=0.1, out_dir=str(tmp_path / 'r'))
-    b = rep['baselines']
-    assert rep['n_paired'] == 40 and b['always_cheap']['accuracy'] == 0.5 and b['always_strong']['accuracy'] == 1.0
-    assert b['oracle']['accuracy'] == 1.0 and b['oracle']['cost_per_task'] == pytest.approx(0.01 + 0.5 * 0.10)
-    j = rep['judges']['fake']
-    assert j['auroc_cheap_correct'] == pytest.approx(1 - 20 / (20 * 20))     # one negative outranks all 20
-    f = j['frozen']
-    assert f['test']['accuracy'] >= f['test_random_same_rate']['accuracy']
-    assert f['cost_vs_strong'] < 1.0
-    md = (tmp_path / 'r' / 'report.md').read_text(encoding='utf-8')
-    assert '| fake |' in md and 'always_strong' in md
-    assert (tmp_path / 'r' / 'curve.csv').read_text().startswith('judge,threshold')
-    assert rep['arms']['cheap']['cost_per_success'] == pytest.approx(0.4 / 20)
+    out_dir = tmp_path / 'r'
+    report = analysis.analyze(
+        cache,
+        'cheap',
+        'strong',
+        calib_frac=0.5,
+        seed=1,
+        tolerance=0.1,
+        out_dir=str(out_dir),
+    )
+    base = report['baselines']
+    assert report['n_paired'] == 40
+    assert base['always_cheap']['accuracy'] == 0.5
+    assert base['always_strong']['accuracy'] == 1.0
+    assert base['oracle']['accuracy'] == 1.0
+    oracle_cost = 0.01 + 0.5 * 0.10
+    assert base['oracle']['cost_per_task'] == pytest.approx(oracle_cost)
+    judge = report['judges']['fake']
+    # one negative outranks all 20 positives
+    assert judge['auroc_cheap_correct'] == pytest.approx(1 - 20 / 400)
+    frozen = judge['frozen']
+    random_accuracy = frozen['test_random_same_rate']['accuracy']
+    assert frozen['test']['accuracy'] >= random_accuracy
+    assert frozen['cost_vs_strong'] < 1.0
+    markdown = (out_dir / 'report.md').read_text(encoding='utf-8')
+    assert '| fake |' in markdown and 'always_strong' in markdown
+    curve = (out_dir / 'curve.csv').read_text()
+    assert curve.startswith('judge,threshold')
+    cost_per_success = report['arms']['cheap']['cost_per_success']
+    assert cost_per_success == pytest.approx(0.4 / 20)
 
 
 def test_sweep_endpoints_and_random_baseline():
-    rows = [{'id': str(i), 'c': i % 2 == 0, 's': True, 'cc': 1.0, 'sc': 10.0, 'p': 0.1 * i, 'jc': 0.0}
-            for i in range(10)]
-    pts = Hn.sweep(rows)
-    assert pts[0]['escalation_rate'] == 0.0 and pts[-1]['escalation_rate'] == 1.0
-    assert pts[-1]['cost_per_task'] == pytest.approx(11.0)
-    rnd = Hn._random_point(rows, 0.5)
-    assert rnd['accuracy'] == pytest.approx(0.75) and rnd['cost_per_task'] == pytest.approx(6.0)
-    assert Hn.auroc([0.9, 0.8, 0.1], [True, True, False]) == 1.0 and Hn.auroc([0.5], [True]) is None
+    rows = [
+        analysis.ReplayRow(
+            str(i),
+            cheap_ok=i % 2 == 0,
+            strong_ok=True,
+            cheap_cost=1.0,
+            strong_cost=10.0,
+            p=0.1 * i,
+            judge_cost=0.0,
+        )
+        for i in range(10)
+    ]
+    points = analysis.sweep(rows)
+    assert points[0]['escalation_rate'] == 0.0
+    assert points[-1]['escalation_rate'] == 1.0
+    assert points[-1]['cost_per_task'] == pytest.approx(11.0)
+    rand = analysis.random_point(rows, 0.5)
+    assert rand['accuracy'] == pytest.approx(0.75)
+    assert rand['cost_per_task'] == pytest.approx(6.0)
+    assert analysis.auroc([0.9, 0.8, 0.1], [True, True, False]) == 1.0
+    assert analysis.auroc([0.5], [True]) is None
 
 
-class _AlwaysAccept(V.FakeVerifier):
-    def _verify(self, task, candidate, rubric, kind, t0):
-        return V.Verdict(self.name, kind, 0.9, 'ok', 0.0, 0.0002, 'const')
+def test_replay_row_costs():
+    row = analysis.ReplayRow(
+        'a',
+        cheap_ok=False,
+        strong_ok=True,
+        cheap_cost=1.0,
+        strong_cost=10.0,
+        p=0.2,
+        judge_cost=0.5,
+    )
+    assert row.escalates(0.5) and not row.escalates(0.1)
+    assert row.cost(True) == 11.5 and row.cost(False) == 1.5
+    pre = analysis.ReplayRow('b', True, True, 1.0, 10.0, p=0.2, pre=True)
+    assert pre.cost(True) == 10.0 and pre.correct(False) is True
+    failed = analysis.ReplayRow('c', True, False, 1.0, 10.0)
+    assert not failed.escalates(0.5)
+    assert failed.escalates(0.5, on_error='escalate')
+
+
+class AlwaysAccept(FakeVerifier):
+    def _verify(self, task, candidate, rubric, kind, started):
+        return Verdict(self.name, kind, 0.9, 'ok', 0.0, 0.0002, 'const')
 
 
 def test_demo_rows_curate_and_regrade(tmp_path, capsys):
     tasks, cache = build_cache(tmp_path)
-    Hn.judge(tasks, cache, 'cheap', ['rival'], verifier_factory=lambda n: _AlwaysAccept(name='rival'),
-             log=lambda *a: None)
-    rows, judges = Hn.demo_rows(cache, 'cheap', 'strong', threshold=0.5)
+    harness.judge(
+        tasks,
+        cache,
+        'cheap',
+        ['rival'],
+        log=quiet,
+        verifier_factory=lambda name: AlwaysAccept(name='rival'),
+    )
+    rows, judges = analysis.demo_rows(cache, 'cheap', 'strong', threshold=0.5)
     assert judges == ['fake', 'rival'] and len(rows) == 40
-    t1 = next(r for r in rows if r['id'] == 't1')
-    assert t1['ideal'] == 'escalate' and t1['judges']['fake']['route'] == 'accept' and not t1['judges']['fake']['correct']
-    t3 = next(r for r in rows if r['id'] == 't3')
-    assert t3['judges']['fake']['cost'] == pytest.approx(0.01 + 0.0001 + 0.10)
-    s = Hn.demo_summary(rows, judges)
-    assert s['always_cheap']['accuracy'] == 0.5 and s['fake']['accuracy'] == pytest.approx(39 / 40)
-    assert s['rival']['strong_rate'] == 0.0 and s['fake']['right_route'] == pytest.approx(39 / 40)
+    t1 = next(row for row in rows if row['id'] == 't1')
+    assert t1['ideal'] == 'escalate'
+    assert t1['judges']['fake']['route'] == 'accept'
+    assert not t1['judges']['fake']['correct']
+    t3 = next(row for row in rows if row['id'] == 't3')
+    expected = 0.01 + 0.0001 + 0.10
+    assert t3['judges']['fake']['cost'] == pytest.approx(expected)
+    summary = analysis.demo_summary(rows, judges)
+    assert summary['always_cheap']['accuracy'] == 0.5
+    assert summary['fake']['accuracy'] == pytest.approx(39 / 40)
+    assert summary['rival']['strong_rate'] == 0.0
+    assert summary['fake']['right_route'] == pytest.approx(39 / 40)
 
-    sel = Hn.curate(cache, 'cheap', 'strong', ours='fake', n=10, accept_frac=0.5)
-    # the rival always accepts, so it is never wrong on accept tasks: every pick is an escalate task, t1 excluded
-    assert sel['picked'] == {'accept': 0, 'escalate': 10} and sel['available'] == {'accept': 0, 'escalate': 19}
-    assert 't1' not in sel['selected'] and 'not an estimate' in sel['note']
+    selection = analysis.curate(
+        cache, 'cheap', 'strong', ours='fake', n=10, accept_frac=0.5
+    )
+    # the rival always accepts, so it is never wrong on accept tasks:
+    # every pick is an escalate task, t1 excluded
+    assert selection['picked'] == {'accept': 0, 'escalate': 10}
+    assert selection['available'] == {'accept': 0, 'escalate': 19}
+    assert 't1' not in selection['selected']
+    assert 'not an estimate' in selection['note']
     with pytest.raises(ValueError):
-        Hn.curate(cache, 'cheap', 'strong', ours='davi')
+        analysis.curate(cache, 'cheap', 'strong', ours='davi')
 
-    from judge_adapter.routing import cli
-    tj = tmp_path / 't.jsonl'
-    tj.write_text(''.join(json.dumps({'id': t.id, 'prompt': t.prompt, 'answer': t.answer}) + '\n' for t in tasks),
-                  encoding='utf-8')
+    task_file = tmp_path / 't.jsonl'
+    task_file.write_text(
+        ''.join(
+            json.dumps({'id': t.id, 'prompt': t.prompt, 'answer': t.answer})
+            + '\n'
+            for t in tasks
+        ),
+        encoding='utf-8',
+    )
     out = tmp_path / 'demo' / 'demo.tasks.jsonl'
-    assert cli.main(['curate', '--tasks', str(tj), '--cache', cache, '--ours', 'fake', '--n', '4',
-                     '--out', str(out)]) == 0
+    assert (
+        cli.main(
+            [
+                'curate',
+                '--tasks',
+                str(task_file),
+                '--cache',
+                cache,
+                '--ours',
+                'fake',
+                '--n',
+                '4',
+                '--out',
+                str(out),
+            ]
+        )
+        == 0
+    )
     assert len(out.read_text(encoding='utf-8').splitlines()) == 4
-    assert json.loads((tmp_path / 'demo' / 'demo.tasks.selection.json').read_text())['ours'] == 'fake'
+    criteria = tmp_path / 'demo' / 'demo.tasks.selection.json'
+    assert json.loads(criteria.read_text())['ours'] == 'fake'
     assert cli.main(['demo', '--cache', cache, '--tasks', str(out)]) == 0
     text = capsys.readouterr().out
     assert 'always_strong' in text and 'rival' in text
 
-    flipped = [Hn.Task(t.id, t.prompt, answer='no') for t in tasks]      # every grade flips
-    assert Hn.regrade(flipped, cache, log=lambda *a: None) == 80
-    assert Hn.regrade(flipped, cache, log=lambda *a: None) == 0
-    rows, _ = Hn.demo_rows(cache, 'cheap', 'strong')
-    assert sum(r['cheap_ok'] for r in rows) == 20 and not any(r['strong_ok'] for r in rows)
+    # every grade flips
+    flipped = [harness.Task(t.id, t.prompt, answer='no') for t in tasks]
+    assert harness.regrade(flipped, cache, log=quiet) == 80
+    assert harness.regrade(flipped, cache, log=quiet) == 0
+    rows, _ = analysis.demo_rows(cache, 'cheap', 'strong')
+    assert sum(row['cheap_ok'] for row in rows) == 20
+    assert not any(row['strong_ok'] for row in rows)
 
 
 def test_cli_dry_run_and_analyze(tmp_path, capsys):
-    from judge_adapter.routing import cli
-    tasks = tmp_path / 't.jsonl'
-    tasks.write_text(json.dumps({'id': 'a', 'prompt': 'hi', 'answer': 'x'}) + '\n', encoding='utf-8')
-    assert cli.main(['generate', '--tasks', str(tasks), '--cache', str(tmp_path / 'c'), '--arm', 'cheap=haiku',
-                     '--dry-run']) == 0
+    task_file = tmp_path / 't.jsonl'
+    task_file.write_text(
+        json.dumps({'id': 'a', 'prompt': 'hi', 'answer': 'x'}) + '\n',
+        encoding='utf-8',
+    )
+    args = [
+        'generate',
+        '--tasks',
+        str(task_file),
+        '--cache',
+        str(tmp_path / 'c'),
+        '--arm',
+        'cheap=haiku',
+    ]
+    assert cli.main(args + ['--dry-run']) == 0
     assert 'claude -p hi --model haiku' in capsys.readouterr().out
     with pytest.raises(SystemExit):
-        cli.main(['generate', '--tasks', str(tasks), '--cache', str(tmp_path / 'c'), '--arm', 'cheap=haiku'])
+        cli.main(args)
     _, cache = build_cache(tmp_path)
-    assert cli.main(['analyze', '--cache', cache, '--cheap', 'cheap', '--strong', 'strong']) == 0
+    assert (
+        cli.main(
+            [
+                'analyze',
+                '--cache',
+                cache,
+                '--cheap',
+                'cheap',
+                '--strong',
+                'strong',
+            ]
+        )
+        == 0
+    )
 
 
-# --- probes ---------------------------------------------------------------------------------------------------------
+# --- probes -----------------------------------------------------------------
 def test_probe_evaluation():
-    n = 'N'
+    nonce = 'N'
     results = {
-        'agent': {'run': {'result': f'391 DAVI-PROBE-A-{n}', 'model_usage': {
-            'claude-sonnet-5-5': {'outputTokens': 50}, 'claude-haiku-5-5': {'outputTokens': 5}},
-            'subagents': {'spawned': 1}}, 'hooks': [{'kind': 'post', 'tool': 'Agent', 'model_in': 'haiku'}]},
-        'stop': {'run': {'result': f'DAVI-PROBE-B-{n}', 'exit_code': 0},
-                 'hooks': [{'kind': 'stop', 'decision': 'block'}, {'kind': 'stop', 'decision': 'allow'}]},
-        'pre': {'run': {'model_usage': {'claude-sonnet-5-5': {'outputTokens': 9},
-                                        'claude-opus-5-5': {'outputTokens': 9}}},
-                'hooks': [{'kind': 'pre', 'changed': True, 'model_requested': 'opus', 'model_set': 'haiku'}]},
+        'agent': {
+            'run': {
+                'result': f'391 DAVI-PROBE-A-{nonce}',
+                'model_usage': {
+                    'claude-sonnet-5-5': {'outputTokens': 50},
+                    'claude-haiku-5-5': {'outputTokens': 5},
+                },
+                'subagents': {'spawned': 1},
+            },
+            'hooks': [{'kind': 'post', 'tool': 'Agent', 'model_in': 'haiku'}],
+        },
+        'stop': {
+            'run': {'result': f'DAVI-PROBE-B-{nonce}', 'exit_code': 0},
+            'hooks': [
+                {'kind': 'stop', 'decision': 'block'},
+                {'kind': 'stop', 'decision': 'allow'},
+            ],
+        },
+        'pre': {
+            'run': {
+                'model_usage': {
+                    'claude-sonnet-5-5': {'outputTokens': 9},
+                    'claude-opus-5-5': {'outputTokens': 9},
+                }
+            },
+            'hooks': [
+                {
+                    'kind': 'pre',
+                    'changed': True,
+                    'model_requested': 'opus',
+                    'model_set': 'haiku',
+                }
+            ],
+        },
     }
-    got = {c['id']: c['result'] for c in Pr.evaluate(results, n)}
-    assert got == {'1a': 'pass', '1b': 'pass', '2': 'pass', '3a': 'pass', '3b': 'pass', '3c': 'pass', '4': 'fail'}
+    got = {c['id']: c['result'] for c in probe.evaluate(results, nonce)}
+    assert got == {
+        '1a': 'pass',
+        '1b': 'pass',
+        '2': 'pass',
+        '3a': 'pass',
+        '3b': 'pass',
+        '3c': 'pass',
+        '4': 'fail',
+    }
+
+
+def launch(kind, env, payload):
+    return subprocess.run(
+        [sys.executable, LAUNCHER, kind],
+        env=env,
+        text=True,
+        input=json.dumps(payload),
+        capture_output=True,
+    )
 
 
 def test_probe_runner_with_fake_claude(tmp_path):
-    """run_probes wiring: the fake runner plays the hooks by running the real launcher with the probe env."""
-    def runner(cmd, env, cwd, timeout):
-        prompt = cmd[2]
+    """run_probes wiring: the fake runner plays the hooks by running the
+    real launcher with the probe environment."""
+
+    def runner(command, env, cwd, timeout):
+        prompt = command[2]
         if 'READY' in prompt:
             for active in (False, True):
-                subprocess.run([sys.executable, str(PLUGIN / 'hooks' / 'route_hook.py'), 'stop'], env=env, text=True,
-                               input=json.dumps({'session_id': 'p', 'hook_event_name': 'Stop', 'transcript_path': '',
-                                                 'stop_hook_active': active, 'last_assistant_message': 'READY'}),
-                               capture_output=True)
-            return {'result': f'DAVI-PROBE-B-{env["DAVI_ROUTE_PROBE_NONCE"]}', 'exit_code': 0}
+                launch(
+                    'stop',
+                    env,
+                    {
+                        'session_id': 'p',
+                        'hook_event_name': 'Stop',
+                        'transcript_path': '',
+                        'stop_hook_active': active,
+                        'last_assistant_message': 'READY',
+                    },
+                )
+            nonce = env['DAVI_ROUTE_PROBE_NONCE']
+            return {'result': f'DAVI-PROBE-B-{nonce}', 'exit_code': 0}
         model = 'opus' if 'model "opus"' in prompt else 'haiku'
-        pre = subprocess.run([sys.executable, str(PLUGIN / 'hooks' / 'route_hook.py'), 'pre'], env=env, text=True,
-                             input=json.dumps(agent_payload('PreToolUse', model=model)), capture_output=True)
-        used = json.loads(pre.stdout)['hookSpecificOutput']['updatedInput']['model'] if pre.stdout else model
-        post = subprocess.run([sys.executable, str(PLUGIN / 'hooks' / 'route_hook.py'), 'post'], env=env, text=True,
-                              input=json.dumps(agent_payload('PostToolUse', model=used)), capture_output=True)
-        marker = json.loads(post.stdout)['hookSpecificOutput']['additionalContext'].split()[3].rstrip('.')
-        return {'result': f'391 {marker}', 'exit_code': 0, 'subagents': {'spawned': 1},
-                'model_usage': {'claude-sonnet-5-5': {'outputTokens': 9}, f'claude-{used}-5-5': {'outputTokens': 3}}}
-    rep = Pr.run_probes(str(PLUGIN), str(tmp_path / 'probe'), runner=runner, nonce='Z', log=lambda *a: None)
-    got = {c['id']: c['result'] for c in rep['checks']}
-    assert got == {k: 'pass' for k in ('1a', '1b', '2', '3a', '3b', '3c', '4')}, rep['checks']
+        pre = launch('pre', env, agent_payload('PreToolUse', model=model))
+        used = model
+        if pre.stdout:
+            used = updated_model(json.loads(pre.stdout))
+        post = launch('post', env, agent_payload('PostToolUse', model=used))
+        context = json.loads(post.stdout)['hookSpecificOutput'][
+            'additionalContext'
+        ]
+        marker = context.split()[3].rstrip('.')
+        return {
+            'result': f'391 {marker}',
+            'exit_code': 0,
+            'subagents': {'spawned': 1},
+            'model_usage': {
+                'claude-sonnet-5-5': {'outputTokens': 9},
+                f'claude-{used}-5-5': {'outputTokens': 3},
+            },
+        }
+
+    report = probe.run_probes(
+        str(PLUGIN),
+        str(tmp_path / 'probe'),
+        runner=runner,
+        nonce='Z',
+        log=quiet,
+    )
+    got = {c['id']: c['result'] for c in report['checks']}
+    expected = ('1a', '1b', '2', '3a', '3b', '3c', '4')
+    assert got == {key: 'pass' for key in expected}, report['checks']
     assert (tmp_path / 'probe' / 'probe-report.json').is_file()
