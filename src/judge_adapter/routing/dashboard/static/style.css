@@ -150,9 +150,11 @@ button:disabled { cursor: not-allowed; opacity: 0.35; }
 .stage { min-width: 0; }
 .stage .flow-card {
   position: sticky;
-  top: 88px;
-  max-height: calc(100vh - 104px);
+  top: 80px;
+  max-height: calc(100vh - 96px);
   overflow-y: auto;
+  padding: 16px 18px 14px;
+  gap: 10px;
 }
 
 .question-card, .gauge-card, .judges-card, .details, .history, .lane, .timing-card, .flow-card {
@@ -473,19 +475,26 @@ textarea:focus { outline: 1px solid var(--accent); }
 
 /* --- the data-flow stage --------------------------------------------------- */
 .flow-card { display: flex; flex-direction: column; gap: 14px; }
-.flow-panels { display: flex; flex-direction: column; gap: 10px; }
+.flow-panels { display: flex; flex-direction: column; gap: 6px; }
 .flow-panel { min-width: 0; }
 .flow-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .flow-head h3 { font-size: 16px; }
 .flow-meta { color: var(--muted); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .flow-routed .flow-meta { color: var(--accent); }
-.flow-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.flow-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* both harnesses, the headers and the caption fit one screen */
+  max-height: calc((100vh - 330px) / 2);
+  overflow: visible;
+}
 .flow-caption {
   margin: 0;
-  min-height: 3.4em;
-  padding-top: 12px;
+  min-height: 3.2em;
+  padding-top: 10px;
   border-top: 1px solid var(--border);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   line-height: 1.6;
   color: var(--ink);
@@ -543,7 +552,7 @@ textarea:focus { outline: 1px solid var(--accent); }
 @keyframes flow-glow { 50% { stroke-opacity: 0.35; } }
 
 /* --- small screens --------------------------------------------------------- */
-@media (max-width: 1280px) {
+@media (max-width: 1100px) {
   .layout { grid-template-columns: var(--drawer) minmax(0, 1fr); }
   .stage { grid-column: 2; grid-row: 1; }
   .column { grid-column: 2; }
