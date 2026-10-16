@@ -665,8 +665,18 @@ function drawerOpen() {
   return !$('layout').classList.contains('collapsed');
 }
 
+// --- theme ------------------------------------------------------------------
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  for (const bench of document.querySelectorAll('.bench')) bench.setAttribute('data-theme', theme);
+  try { localStorage.setItem('davi-theme', theme); } catch (error) { /* private mode */ }
+}
+
 // --- wiring -----------------------------------------------------------------
 $('drawer-toggle').addEventListener('click', () => setDrawer(!drawerOpen()));
+$('theme-toggle').addEventListener('click', () => {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+});
 try { if (localStorage.getItem('davi-drawer') === 'closed') setDrawer(false); } catch (error) { /* private mode */ }
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => setMode(tab.dataset.mode));

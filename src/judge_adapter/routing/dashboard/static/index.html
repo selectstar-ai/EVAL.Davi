@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Davi 라우팅 라이브</title>
+  <script>
+    try { document.documentElement.dataset.theme = localStorage.getItem('davi-theme') || 'light'; }
+    catch (error) { document.documentElement.dataset.theme = 'light'; }
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -23,6 +27,10 @@
       <button class="tab active" data-mode="live" role="tab">실시간 실행</button>
       <button class="tab" data-mode="replay" role="tab">녹화 재생</button>
     </nav>
+    <button class="theme-toggle" id="theme-toggle" type="button" title="밝게 / 어둡게" aria-label="밝은 화면과 어두운 화면 전환">
+      <svg class="sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3" /><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" /></svg>
+      <svg class="moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 9.6A5.5 5.5 0 0 1 6.4 3a5.5 5.5 0 1 0 6.6 6.6z" /></svg>
+    </button>
     <div class="tally" id="tally" hidden>
       <span class="tally-label">이번 시연 누적 절감</span>
       <span class="tally-value" id="tally-value"></span>

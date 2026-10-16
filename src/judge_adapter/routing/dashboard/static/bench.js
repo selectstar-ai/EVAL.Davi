@@ -38,7 +38,7 @@ const BENCH = (() => {
       ...K.boxCorners({ x: 168, y: -58, w: 76, d: 62, r: 5 }, -10, 0),
       // room for the tags above the back row and below the plate
       [-130, -40, 60], [70, -40, 60], [DAVI.x, DAVI.y, 60],
-      [-130, 74, -48], [130, 74, -48],
+      [-130, 74, -60], [130, 74, -60],
     ],
     WIDTH,
     HEIGHT,
@@ -297,7 +297,7 @@ class BenchPanel {
     head.append(this.heading, this.meta);
     this.stage = document.createElement('div');
     this.stage.className = 'bench iso';
-    this.stage.setAttribute('data-theme', 'dark');
+    this.stage.setAttribute('data-theme', document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
     this.root.append(head, this.stage);
     container.append(this.root);
     this.build();
