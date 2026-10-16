@@ -138,7 +138,7 @@ def opus_arm(policy=None):
     strong = (policy or TierPolicy()).strong_model
     return ArmSpec(
         key='opus',
-        label='항상 opus',
+        label='서브에이전트 언제나 Opus',
         options={
             'ROUTE_ENABLED': 'true',
             'ROUTE_MODE': 'post',

@@ -97,7 +97,7 @@ class SessionConfig:
 
     plugin_dir: str
     claude_bin: str = 'claude'
-    main_model: str = 'opus'
+    main_model: str = 'sonnet'
     timeout: int = 900
     budget_usd: float = 1.0
     env: dict = field(default_factory=dict)  # source of passthrough envs

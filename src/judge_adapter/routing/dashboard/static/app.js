@@ -1,9 +1,11 @@
 'use strict';
 
 const MODEL_KINDS = { haiku: '가벼운 모델', sonnet: '중간 모델', opus: '고성능 모델' };
+// recordings keep the labels they were made with; show the current ones
+const ARM_LABELS = { routed: 'Davi 라우팅', opus: '서브에이전트 언제나 Opus' };
 const ARM_TEXT = {
   routed: { sub: '서브에이전트는 Davi가 고름', judge: '판정 중…' },
-  opus: { sub: '서브에이전트는 언제나 opus', judge: '판정 없음' },
+  opus: { sub: '서브에이전트는 언제나 Opus', judge: '판정 없음' },
 };
 
 const app = {
@@ -66,6 +68,12 @@ function verdictMark(correct) {
 async function loadInfo() {
   const response = await fetch('/api/state');
   app.info = await response.json();
+  if (app.info.main_model) {
+    window.DAVI_MAIN_MODEL = app.info.main_model;
+    const name = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus' }[modelKey(app.info.main_model)] || app.info.main_model;
+    for (const node of document.querySelectorAll('[data-main-model]')) node.textContent = name;
+    for (const panel of Object.values(flow.panels)) if (!panel.started) panel.setHeading(app.info.main_model);
+  }
   renderTasks();
   renderRecordings();
   renderSpeeds();
@@ -194,6 +202,7 @@ function watch(runId) {
 
 // --- drawing one run --------------------------------------------------------
 function resetRun(data) {
+  data.arms = data.arms.map((arm) => ({ ...arm, label: ARM_LABELS[arm.key] || arm.label }));
   const run = app.run;
   run.mode = data.mode;
   run.speed = data.speed || 1;
@@ -550,7 +559,7 @@ function bannerText(summary) {
   let head;
   if (rc === true && oc === true) head = '두 쪽 모두 정답';
   else if (rc === true && oc === false) head = 'Davi 라우팅만 정답';
-  else if (rc === false && oc === true) head = '이번에는 opus만 정답';
+  else if (rc === false && oc === true) head = '이번에는 Opus 고정 쪽만 정답';
   else if (rc === false && oc === false) head = '두 쪽 모두 오답';
   else head = '채점 없는 질문';
   let cost = '';

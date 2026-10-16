@@ -99,7 +99,8 @@ def cmd_dashboard(args):
     if app.live_enabled:
         print(
             '  live runs ON: each run starts two claude -p sessions '
-            f'(routed + always opus, main agent {args.main_model}) and '
+            f'(main agent {args.main_model} in both; subagents routed by Davi '
+            'or always opus) and '
             'spends money'
         )
     else:
@@ -175,8 +176,8 @@ def _add_common(parser):
     parser.add_argument('--claude-bin', default='claude')
     parser.add_argument(
         '--main-model',
-        default='opus',
-        help='main agent model of both sessions (default opus)',
+        default='sonnet',
+        help='main agent model of both sessions (default sonnet)',
     )
     parser.add_argument('--timeout', type=int, default=900)
     parser.add_argument('--budget-usd', type=float, default=1.0)

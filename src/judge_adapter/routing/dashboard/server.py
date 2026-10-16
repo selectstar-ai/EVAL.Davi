@@ -92,6 +92,7 @@ class DashboardApp:
                 'busy': busy,
             },
             'judges': list(self._judges),
+            'main_model': self._config.main_model if self._config else None,
             'tiers': {
                 'low': policy.low,
                 'high': policy.high,

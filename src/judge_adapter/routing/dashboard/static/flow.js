@@ -3,7 +3,7 @@
 // The data-flow view: two Claude Code benches (bench.js) driven by the
 // run's real events, with a caption that narrates each step.
 const IDLE_ARMS = [
-  { key: 'opus', label: '항상 opus' },
+  { key: 'opus', label: '서브에이전트 언제나 Opus' },
   { key: 'routed', label: 'Davi 라우팅' },
 ];
 const MODEL_NAMES = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus' };

@@ -291,7 +291,7 @@ class BenchPanel {
     const head = document.createElement('div');
     head.className = 'flow-head';
     this.heading = document.createElement('h3');
-    this.heading.textContent = this.routed ? 'Davi · 작업별 모델 선택' : '기준 · 모든 서브에이전트 Opus';
+    this.setHeading(window.DAVI_MAIN_MODEL);
     this.meta = document.createElement('span');
     this.meta.className = 'flow-meta';
     head.append(this.heading, this.meta);
@@ -301,6 +301,14 @@ class BenchPanel {
     this.root.append(head, this.stage);
     container.append(this.root);
     this.build();
+  }
+
+  setHeading(mainModel) {
+    const main = BAY_NAMES[flowModel(mainModel)] || mainModel;
+    const lead = main ? `메인 ${main} · ` : '';
+    this.heading.textContent = this.routed
+      ? `Davi · ${lead}서브에이전트는 작업마다 선택`
+      : `기준 · ${lead}서브에이전트 언제나 Opus`;
   }
 
   build() {
@@ -604,6 +612,7 @@ class BenchPanel {
     const { TOP_GROOVE: T, STATION } = BENCH;
     this.started = now;
     this.startedAt = typeof data.started_at === 'number' ? data.started_at : null;
+    if (data.main_model) this.setHeading(data.main_model);
     this.queue(async () => {
       this.light('question', true);
       const puck = this.puck('back');

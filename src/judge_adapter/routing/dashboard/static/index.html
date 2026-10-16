@@ -72,8 +72,9 @@
       <section class="intro" id="intro">
         <p class="eyebrow">DAVI ROUTE · LIVE DEMO</p>
         <h1 class="headline">Claude Code는 그대로 두고,<br>서브에이전트의 모델만 밖에서 고릅니다.</h1>
-        <p class="lede">같은 질문을 Claude Code 두 개에 동시에 보냅니다. 한쪽은 모든 서브에이전트가 opus,
-          다른 쪽은 Davi가 작업마다 haiku · sonnet · opus 중 하나를 고릅니다. 메인 에이전트는 양쪽 모두 같습니다.</p>
+        <p class="lede">같은 질문을 Claude Code 두 개에 동시에 보냅니다. 메인 에이전트는 양쪽 모두
+          <span data-main-model>Sonnet</span>으로 같고, 다른 것은 서브에이전트 모델 하나입니다. 기준 쪽은 서브에이전트가
+          언제나 Opus이고, Davi 쪽은 작업마다 Haiku · Sonnet · Opus 중 하나를 고릅니다.</p>
         <p class="stats"><span>판정 약 0.15초</span><span>Claude Code 수정 없음</span><span>훅 하나로 개입</span></p>
       </section>
 
@@ -146,7 +147,7 @@
         <table>
           <thead>
             <tr><th>질문</th><th>Davi 배정</th><th>라우팅 비용</th>
-              <th>항상 opus 비용</th><th>절감</th><th>정답 (라우팅 / opus)</th></tr>
+              <th>서브 Opus 고정 비용</th><th>절감</th><th>정답 (Davi / Opus 고정)</th></tr>
           </thead>
           <tbody id="history-body"></tbody>
         </table>

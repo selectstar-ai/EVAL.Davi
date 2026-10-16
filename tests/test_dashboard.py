@@ -188,7 +188,7 @@ def test_sessions_never_get_the_anthropic_key(tmp_path):
     assert 'DAVI_BASE_URL' not in env
     assert env['DAVI_ROUTE_ROUTE_CHEAP_MODEL'] == 'opus'
     command = routed.command(TASK)
-    assert command[command.index('--model') + 1] == 'opus'
+    assert command[command.index('--model') + 1] == 'sonnet'
     assert '--plugin-dir' in command and 'WebSearch' in command
 
 
