@@ -486,7 +486,7 @@ textarea:focus { outline: 1px solid var(--accent); }
   width: 100%;
   height: auto;
   /* both harnesses, the headers and the caption fit one screen */
-  max-height: calc((100vh - 330px) / 2);
+  max-height: calc((100vh - 380px) / 2);
   overflow: visible;
 }
 .flow-caption {
@@ -572,3 +572,29 @@ textarea:focus { outline: 1px solid var(--accent); }
   .flow-edge[data-state="active"], .flow-davi[data-state="active"] .flow-body,
   .flow-sub[data-state="active"] .flow-body, .gauge.thinking .zone { animation: none; }
 }
+
+/* --- the Anatomy benches --------------------------------------------------- */
+.bench.iso {
+  --anatomy-card: var(--surface);
+  --anatomy-paper: var(--surface);
+  --anatomy-face: #1a1b1e;
+  --anatomy-top: #1b1c1f;
+  --anatomy-shade-0: #0d0e0f;
+  --anatomy-shade-1: #111214;
+  --anatomy-shade-2: #141517;
+  --anatomy-shade-3: #17181b;
+  --anatomy-lit-top: #2a2a46;
+  --anatomy-lit-shade: #1e1e33;
+  --anatomy-lit: #a9a8ff;
+  --anatomy-halo: #000000;
+  background: transparent;
+}
+.bench .flow-svg { display: block; }
+.bench-flow { opacity: 0; stroke-width: 1.6 !important; stroke-dasharray: 2 6; transition: opacity 0.25s; }
+.bench-flow.on { opacity: 1; animation: iso-flow 0.9s linear infinite; }
+.bench-idle { opacity: 0.78; }
+.bench-legend { margin: 0; color: var(--faint); font-size: 11.5px; line-height: 1.6; }
+.bench-legend b { color: var(--muted); font-family: var(--mono); font-weight: 500; font-size: 10.5px; }
+.bench .flow-svg[data-result="wrong"] [data-part="stamp"] .iso-edge { stroke: var(--bad); }
+.bench .flow-svg[data-result="correct"] [data-part="stamp"] .iso-edge { stroke: var(--good); }
+@media (prefers-reduced-motion: reduce) { .bench-flow.on { animation: none; } }

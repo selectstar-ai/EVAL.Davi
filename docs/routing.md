@@ -218,7 +218,9 @@ davi-route dashboard --tasks demo-candidates/klear_demo.tasks.jsonl --open
   (`--main-model`로 변경, 양쪽에 같은 값). 서브에이전트 모델만 다릅니다.
   - 왼쪽(Davi 라우팅): 플러그인 `route_mode=tiers`, Davi가 서브에이전트 지시문의 난이도를 보고 haiku / sonnet / opus 중 하나를 고름
   - 오른쪽(항상 opus): 같은 플러그인으로 모든 서브에이전트를 opus에 고정(판정자 호출 없음)
-- **데이터 흐름 뷰**(맨 위): 두 Claude Code(AGENT HARNESS) 안의 흐름을 실제 이벤트로 그립니다. 사용자 질문 → 메인 에이전트
+- **데이터 흐름 뷰**(오른쪽 고정): 두 Claude Code 작업대를 Anatomy 스킬의 아이소메트릭 kit으로 그리고(`static/bench.js`,
+  kit은 `static/iso-kit.js`·`iso.css`에 MIT 라이선스와 함께 포함), 실제 이벤트로 움직입니다. 과제 퍽이 각 부품을 지나가고,
+  Davi 쪽은 작업대 밖의 Davi 계기와 케이블로 연결된 분기기가 판정에 따라 haiku · sonnet · opus 칸 중 하나로 보냅니다. 사용자 질문 → 메인 에이전트
   → 메인이 만든 Agent 호출(실제 개수만큼) → PreToolUse 훅 → 서브에이전트(실제 모델·시간·출력 토큰·도구 횟수) → 결과 취합
   → 최종 답변(정답 여부·실제 비용). Davi 쪽은 훅이 Claude Code 밖의 Davi로 과제를 보내고 판정(시간·난이도·모델)을
   돌려받는 것이 보입니다. 아래 자막이 단계를 설명하고, 비용은 `total_cost_usd` 실제 값입니다.

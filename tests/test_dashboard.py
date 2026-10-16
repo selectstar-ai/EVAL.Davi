@@ -339,6 +339,9 @@ def test_server_state_page_and_static(server):
     assert request(server, '/static/app.js')[0] == 200
     status, text = request(server, '/static/flow.js')
     assert status == 200 and 'class FlowView' in text
+    status, text = request(server, '/static/bench.js')
+    assert status == 200 and 'class BenchPanel' in text
+    assert request(server, '/static/iso-kit.js')[0] == 200
     assert request(server, '/static/../server.py')[0] == 404
     assert request(server, '/api/nothing')[0] == 404
 

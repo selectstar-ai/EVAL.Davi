@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <link rel="stylesheet" href="/static/iso.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -148,6 +149,9 @@
       <section class="flow-card">
         <p class="eyebrow">01 · 같은 작업, 다른 모델 배정</p>
         <div class="flow-panels" id="flow-panels"></div>
+        <p class="bench-legend"><b>PROMPT</b> 질문 · <b>MAIN</b> 메인 에이전트(계획·취합) · <b>AGENT</b> Agent 호출
+          · <b>HOOK</b> PreToolUse 분기기 · <b>HAIKU/SONNET/OPUS</b> 서브에이전트 칸(높을수록 강한 모델)
+          · <b>ANSWER</b> 최종 답변 · 작업대 바깥 <b>DAVI</b> 계기: 바늘이 난이도</p>
         <p class="flow-caption" id="flow-caption">질문을 고르고 실행하면, 두 Claude Code 안에서 일어나는 일을 여기서 실시간으로 봅니다.</p>
         <p class="flow-footer" id="flow-footer"></p>
       </section>
@@ -178,6 +182,8 @@
     </div>
   </template>
 
+  <script src="/static/iso-kit.js"></script>
+  <script src="/static/bench.js"></script>
   <script src="/static/flow.js"></script>
   <script src="/static/app.js"></script>
 </body>
