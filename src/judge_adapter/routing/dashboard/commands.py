@@ -11,6 +11,7 @@ spends money; ``record`` runs many questions in a row for later replay.
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import webbrowser
@@ -24,6 +25,7 @@ from .store import RecordingStore
 from .tasks import load_demo_tasks
 
 ALL_JUDGES = ('davi', 'jev', 'claude')
+PORT_TRIES = 20
 JUDGE_KEYS = {'jev': 'jev', 'claude': 'claude'}
 
 
@@ -44,6 +46,19 @@ def live_problem(env, claude_bin):
     if not (env.get('DAVI_BASE_URL') or env.get('DAVI_ROUTE_DAVI_BASE_URL')):
         return 'DAVI_BASE_URL이 설정되지 않았습니다.'
     return None
+
+
+def open_server(host, port, app, tries=PORT_TRIES):
+    """A server on ``port``, or the next free port when it is taken."""
+    for candidate in range(port, port + tries):
+        try:
+            return DashboardServer((host, candidate), app)
+        except OSError as error:
+            if error.errno != errno.EADDRINUSE:
+                raise
+    raise SystemExit(
+        f'ports {port}-{port + tries - 1} are all in use; pass --port'
+    )
 
 
 def session_config(args, env):
@@ -76,7 +91,9 @@ def cmd_dashboard(args):
         policy=_policy(args),
         live_problem=problem,
     )
-    server = DashboardServer((args.host, args.port), app)
+    server = open_server(args.host, args.port, app)
+    if server.server_address[1] != args.port:
+        print(f'port {args.port} is in use; using {server.server_address[1]}')
     print(f'dashboard: {server.url}')
     print(f'  questions {len(tasks)}, recordings in {store.directory}')
     if app.live_enabled:

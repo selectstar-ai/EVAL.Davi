@@ -13,6 +13,7 @@ import urllib.request
 
 import pytest
 
+from judge_adapter.routing.dashboard.commands import open_server
 from judge_adapter.routing.dashboard.events import EventChannel
 from judge_adapter.routing.dashboard.runs import (
     LiveRun,
@@ -360,3 +361,15 @@ def test_live_runs_can_be_turned_off(tmp_path):
     assert not app.live_enabled
     with pytest.raises(PermissionError):
         app.start_live(task_id='t1')
+
+
+def test_a_taken_port_moves_to_the_next_one(tmp_path):
+    app = DashboardApp([TASK], RecordingStore(str(tmp_path)))
+    first = open_server('127.0.0.1', 0, app)
+    port = first.server_address[1]
+    try:
+        second = open_server('127.0.0.1', port, app)
+        assert second.server_address[1] > port
+        second.server_close()
+    finally:
+        first.server_close()
