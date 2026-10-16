@@ -6,7 +6,8 @@
   <title>Davi 라우팅 라이브</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@400;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -27,17 +28,16 @@
     </div>
   </header>
 
-  <div class="layout">
-    <main class="column">
-      <section class="intro" id="intro">
-        <p class="eyebrow">DAVI ROUTE · LIVE DEMO</p>
-        <h1 class="headline">Claude Code는 그대로 두고,<br>서브에이전트의 모델만 밖에서 고릅니다.</h1>
-        <p class="lede">같은 질문을 Claude Code 두 개에 동시에 보냅니다. 한쪽은 모든 서브에이전트가 opus,
-          다른 쪽은 Davi가 작업마다 haiku · sonnet · opus 중 하나를 고릅니다. 메인 에이전트는 양쪽 모두 같습니다.</p>
-        <p class="stats"><span>판정 약 0.15초</span><span>Claude Code 수정 없음</span><span>훅 하나로 개입</span></p>
-      </section>
-
-      <section class="picker">
+  <div class="layout" id="layout">
+    <aside class="drawer" id="drawer">
+      <div class="drawer-head">
+        <span class="drawer-title">질문</span>
+        <button class="drawer-toggle" id="drawer-toggle" type="button" aria-expanded="true"
+          aria-controls="drawer-body" title="질문 목록 접기/펴기">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5" /></svg>
+        </button>
+      </div>
+      <div class="drawer-body" id="drawer-body">
         <section id="live-panel">
         <h2>질문 고르기</h2>
         <p class="hint" id="live-status"></p>
@@ -56,7 +56,18 @@
         <p class="fine" id="replay-empty" hidden>아직 녹화가 없습니다. 실시간
           실행을 하면 자동으로 녹화됩니다.</p>
         </section>
+      </div>
+    </aside>
+
+    <main class="column">
+      <section class="intro" id="intro">
+        <p class="eyebrow">DAVI ROUTE · LIVE DEMO</p>
+        <h1 class="headline">Claude Code는 그대로 두고,<br>서브에이전트의 모델만 밖에서 고릅니다.</h1>
+        <p class="lede">같은 질문을 Claude Code 두 개에 동시에 보냅니다. 한쪽은 모든 서브에이전트가 opus,
+          다른 쪽은 Davi가 작업마다 haiku · sonnet · opus 중 하나를 고릅니다. 메인 에이전트는 양쪽 모두 같습니다.</p>
+        <p class="stats"><span>판정 약 0.15초</span><span>Claude Code 수정 없음</span><span>훅 하나로 개입</span></p>
       </section>
+
 
       <section class="run" id="run" hidden>
         <div class="question-card">

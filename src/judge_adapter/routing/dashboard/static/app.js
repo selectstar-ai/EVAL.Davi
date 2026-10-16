@@ -200,6 +200,7 @@ function resetRun(data) {
   run.tiers = data.tiers;
   $('intro').hidden = true;
   $('run').hidden = false;
+  if (drawerOpen()) setDrawer(false);
   $('banner').hidden = true;
   $('timing').hidden = false;
   $('timing-rows').replaceChildren();
@@ -653,7 +654,20 @@ function tick() {
   }
 }
 
+// --- the question drawer ----------------------------------------------------
+function setDrawer(open) {
+  $('layout').classList.toggle('collapsed', !open);
+  $('drawer-toggle').setAttribute('aria-expanded', String(open));
+  try { localStorage.setItem('davi-drawer', open ? 'open' : 'closed'); } catch (error) { /* private mode */ }
+}
+
+function drawerOpen() {
+  return !$('layout').classList.contains('collapsed');
+}
+
 // --- wiring -----------------------------------------------------------------
+$('drawer-toggle').addEventListener('click', () => setDrawer(!drawerOpen()));
+try { if (localStorage.getItem('davi-drawer') === 'closed') setDrawer(false); } catch (error) { /* private mode */ }
 for (const tab of document.querySelectorAll('.tab')) {
   tab.addEventListener('click', () => setMode(tab.dataset.mode));
 }
