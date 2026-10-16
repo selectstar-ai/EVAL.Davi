@@ -17,9 +17,8 @@
 const BENCH = (() => {
   const K = window.ISO;
   const WIDTH = 760;
-  const HEIGHT = 400;
+  const HEIGHT = 330;
   const PLATE = { x: -152, y: -64, w: 304, d: 138, r: 8 };
-  const SIGN = { x: -120, y: -63, w: 176, d: 3, r: 0.6 };
   const TOP_GROOVE = -6;
   const BOTTOM_GROOVE = 60;
   const BAYS = { haiku: 20, sonnet: 70, opus: 120 };
@@ -37,15 +36,16 @@ const BENCH = (() => {
     [
       ...K.boxCorners(PLATE, -16, 0),
       ...K.boxCorners({ x: 168, y: -58, w: 76, d: 62, r: 5 }, -10, 0),
-      [SIGN.x, SIGN.y, 24], [SIGN.x + SIGN.w, SIGN.y, 24],
-      [120, 35, 32], [DAVI.x, DAVI.y, 34],
+      // room for the tags above the back row and below the plate
+      [-130, -40, 60], [70, -40, 60], [DAVI.x, DAVI.y, 60],
+      [-130, 74, -48], [130, 74, -48],
     ],
     WIDTH,
     HEIGHT,
-    { pad: 52, azimuth: 66, elevation: 46 },
+    { pad: 8, azimuth: 80, elevation: 40 },
   );
   return {
-    K, P, WIDTH, HEIGHT, PLATE, SIGN, TOP_GROOVE, BOTTOM_GROOVE, BAYS, BAY_HEIGHT, STATION, DAVI,
+    K, P, WIDTH, HEIGHT, PLATE, TOP_GROOVE, BOTTOM_GROOVE, BAYS, BAY_HEIGHT, STATION, DAVI,
   };
 })();
 
@@ -104,7 +104,7 @@ class BenchArt {
   }
 
   plate() {
-    const { K, P, PLATE, SIGN } = BENCH;
+    const { K, P, PLATE } = BENCH;
     const out = [`<path class="iso-halo" d="${K.haloOf(PLATE, -16, 10, P)}"/>`];
     const feet = K.corners(PLATE, 22).sort((a, b) => K.depthOf([...a, 0], P) - K.depthOf([...b, 0], P));
     for (const [x, y] of feet) {
@@ -116,12 +116,11 @@ class BenchArt {
     const screws = K.corners(PLATE, 10);
     out.push(this.L(screws.map(([x, y]) => K.ring(x, y, 2, 0, P, 14)).join(''), { tone: 'lo' }));
     out.push(this.D(screws.map(([x, y]) => this.at([x, y, 0])), { size: 0.5 }));
-    // the nameplate standing at the back
-    out.push(this.S(K.slabOf(SIGN, 0, 22, P, 2, 0.4), { tone: 'hi', crease: 'lo', className: 'sign' }));
-    const face = SIGN.y + SIGN.d;
-    out.push(K.faceTextSvg(this.faceMatrix(SIGN.x + 8, face, 11.6), 'CLAUDE CODE', { size: 8.4, tone: 'hi' }));
-    out.push(K.faceTextSvg(this.faceMatrix(SIGN.x + 8, face, 4.6), 'AGENT HARNESS · 그대로 둔 Claude Code', { size: 4.2, tone: 'mid' }));
-    out.push(this.D([this.at([SIGN.x + 3, face, 18.6]), this.at([SIGN.x + SIGN.w - 3, face, 18.6])], { size: 0.5 }));
+    // the nameplate along the front edge
+    const strip = { x: -146, y: 64, w: 292, d: 8, r: 1.2 };
+    out.push(this.S(K.slabOf(strip, 0, 0.8, P, 3), { tone: 'lo', crease: 'none', className: 'sign' }));
+    out.push(K.faceTextSvg(K.topMatrix([strip.x + 5, strip.y + 6.2], 0.8, P, 'x'), 'CLAUDE CODE  ·  AGENT HARNESS', { size: 5.6, tone: 'hi' }));
+    out.push(this.D([this.at([strip.x + 2, strip.y + 4, 0.8]), this.at([strip.x + strip.w - 2, strip.y + 4, 0.8])], { size: 0.5 }));
     return out.join('');
   }
 
@@ -387,7 +386,7 @@ class BenchPanel {
   buildTags() {
     const { STATION, BAYS, DAVI } = BENCH;
     this.tags = {};
-    const add = (key, point, side, title, value) => {
+    const add = (key, point, side, title, value, lift) => {
       const anchor = BENCH.K.iso(point, BENCH.P);
       const group = benchSvg('g', { class: `bench-tag bench-tag-${key}`, 'data-state': 'idle' });
       const line = benchSvg('path', { class: 'bench-tag-line' });
@@ -396,36 +395,39 @@ class BenchPanel {
       const text = benchSvg('text', { class: 'bench-tag-value' }, value);
       group.append(line, box, name, text);
       this.parts.tags.append(group);
-      this.tags[key] = { group, line, box, name, text, anchor, side };
+      this.tags[key] = { group, line, box, name, text, anchor, side, lift };
     };
     const station = (key) => [STATION[key].x, STATION[key].y, STATION[key].top];
-    add('question', station('question'), 'up', '질문', '대기');
-    add('main', station('main'), 'up', '메인 에이전트 · 계획', '-');
-    add('agent', station('agent'), 'up', 'Agent 호출', '-');
-    add('hook', station('hook'), 'up', this.routed ? 'PreToolUse 훅 · davi-route' : 'PreToolUse 훅 · opus 고정', '-');
+    const below = (x) => [x, 74, -10];
+    add('question', station('question'), 'up', '질문', '대기', 8);
+    add('main', station('main'), 'up', '메인 에이전트 · 계획', '-', 52);
+    add('agent', station('agent'), 'up', 'Agent 호출', '-', 8);
+    add('hook', station('hook'), 'up', this.routed ? 'PreToolUse 훅 · 우리 플러그인' : 'PreToolUse 훅 · opus 고정', '-', 52);
     for (const [model, x] of Object.entries(BAYS)) {
       const used = this.routed || model === 'opus';
-      add(model, [x, 50, 0], 'down', `${BAY_NAMES[model]} 서브에이전트`, used ? '-' : '사용 안 함');
+      add(model, below(x), 'down', `${BAY_NAMES[model]} 서브에이전트`, used ? '-' : '사용 안 함', model === 'sonnet' ? 54 : 10);
     }
-    add('collect', [STATION.collect.x, STATION.collect.y + 16, 0], 'down', '메인 에이전트 · 취합', '-');
-    add('final', [STATION.final.x, STATION.final.y + 13, 0], 'down', '최종 답변', '-');
-    if (this.routed) add('davi', [DAVI.x, DAVI.y, DAVI.top], 'up', 'Davi 판정 모델 · 우리 것', '대기');
-    requestAnimationFrame(() => Object.keys(this.tags).forEach((key) => this.layoutTag(key)));
+    add('collect', below(STATION.collect.x), 'down', '메인 에이전트 · 취합', '-', 54);
+    add('final', below(STATION.final.x), 'down', '최종 답변', '-', 10);
+    if (this.routed) add('davi', [DAVI.x, DAVI.y, DAVI.top], 'up', 'Davi 판정 모델 · 우리 것', '대기', 22);
+    const relayout = () => Object.keys(this.tags).forEach((key) => this.layoutTag(key));
+    requestAnimationFrame(relayout);
+    document.fonts?.ready.then(relayout);
   }
 
   layoutTag(key) {
     const tag = this.tags[key];
     if (!tag || !tag.group.isConnected) return;
     const [ax, ay] = tag.anchor;
-    const lift = tag.side === 'up' ? 18 : 16;
-    const pad = 6;
-    let width = 70;
+    const lift = tag.lift;
+    const pad = 7;
+    let width = 80;
     try {
       width = Math.max(tag.name.getComputedTextLength(), tag.text.getComputedTextLength()) + pad * 2;
     } catch (error) {
-      width = 70;
+      width = 80;
     }
-    const height = 30;
+    const height = 36;
     const top = tag.side === 'up' ? ay - lift - height : ay + lift;
     const left = ax - width / 2;
     tag.box.setAttribute('x', left.toFixed(1));
@@ -433,9 +435,9 @@ class BenchPanel {
     tag.box.setAttribute('width', width.toFixed(1));
     tag.box.setAttribute('height', height);
     tag.name.setAttribute('x', (left + pad).toFixed(1));
-    tag.name.setAttribute('y', (top + 12).toFixed(1));
+    tag.name.setAttribute('y', (top + 14).toFixed(1));
     tag.text.setAttribute('x', (left + pad).toFixed(1));
-    tag.text.setAttribute('y', (top + 25).toFixed(1));
+    tag.text.setAttribute('y', (top + 30).toFixed(1));
     const edge = tag.side === 'up' ? top + height : top;
     tag.line.setAttribute('d', `M${ax.toFixed(1)} ${ay.toFixed(1)}L${ax.toFixed(1)} ${edge.toFixed(1)}`);
   }
@@ -653,7 +655,7 @@ class BenchPanel {
         await this.wait(650);
         this.setTag('davi', level == null ? '판정 실패 → 기본 모델' : `${secondsText(data.latency_s)} · 난이도 ${level.toFixed(2)}`, 'done');
         for (const name of Object.keys(BAYS)) {
-          const value = shares ? `확률 ${Math.round(shares[name] * 100)}%` : name === model ? '선택' : '-';
+          const value = shares ? `확률 ${Math.round(shares[name] * 100)}%` : name === model ? '선택됨' : '-';
           this.setTag(name, value, name === model ? 'chosen' : 'idle');
         }
         await this.pulse(420);
@@ -696,8 +698,6 @@ class BenchPanel {
       const parts = [];
       if (call.shares) parts.push(`${Math.round(call.shares[model] * 100)}%`);
       if (typeof data.subagent_ms === 'number') parts.push(secondsText(data.subagent_ms / 1000));
-      const tokens = data.subagent_output_tokens ?? data.subagent_tokens;
-      if (typeof tokens === 'number') parts.push(`${tokens.toLocaleString('ko-KR')}토큰`);
       this.setTag(model, parts.join(' · ') || '완료', 'chosen');
       this.light(model, false);
       this.lamp(model, false);
