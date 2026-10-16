@@ -11,3 +11,6 @@ dist/
 *.env
 judge_adapter_trace/
 run-*/
+
+# davi-route dashboard recordings (questions and answers)
+dashboard-recordings/

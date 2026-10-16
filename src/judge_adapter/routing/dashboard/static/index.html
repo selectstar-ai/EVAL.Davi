@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Davi 라우팅 라이브</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">D</span>
+      <div>
+        <h1>Davi 라우팅 라이브</h1>
+        <p class="tagline">쉬운 일은 가벼운 모델로, 어려운 일만 고성능 모델로</p>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-mode="live" role="tab">실시간 실행</button>
+      <button class="tab" data-mode="replay" role="tab">녹화 재생</button>
+    </nav>
+    <div class="tally" id="tally" hidden>
+      <span class="tally-label">이번 시연 누적</span>
+      <span class="tally-value" id="tally-value"></span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <section id="live-panel">
+        <h2>질문 고르기</h2>
+        <p class="hint" id="live-status"></p>
+        <ul class="task-list" id="task-list"></ul>
+        <label class="free-label" for="free-question">또는 직접 질문하기</label>
+        <textarea id="free-question" rows="3"
+          placeholder="예: 대한민국의 수도는 어디야?"></textarea>
+        <button class="primary" id="run-button" disabled>두 세션 동시에 실행</button>
+        <p class="fine">실행하면 Claude Code 두 개가 같은 질문을 동시에 풉니다.
+          실제 비용이 발생합니다.</p>
+      </section>
+      <section id="replay-panel" hidden>
+        <h2>녹화된 시연</h2>
+        <div class="speeds" id="speeds" role="group" aria-label="재생 속도"></div>
+        <ul class="task-list" id="recording-list"></ul>
+        <p class="fine" id="replay-empty" hidden>아직 녹화가 없습니다. 실시간
+          실행을 하면 자동으로 녹화됩니다.</p>
+      </section>
+    </aside>
+
+    <main class="stage">
+      <section class="intro" id="intro">
+        <h2>무엇을 보여주나요?</h2>
+        <ol class="intro-steps">
+          <li><strong>같은 질문</strong>을 Claude Code 두 개에 동시에 보냅니다.</li>
+          <li>왼쪽은 <strong>Davi</strong>가 먼저 난이도를 보고 가벼운 모델(haiku),
+            중간 모델(sonnet), 고성능 모델(opus) 중 하나를 고릅니다.</li>
+          <li>오른쪽은 늘 <strong>고성능 모델(opus)</strong>만 씁니다.</li>
+          <li>정답과 비용을 나란히 비교합니다.</li>
+        </ol>
+        <p class="hint">왼쪽에서 질문을 고르고 실행해 보세요.</p>
+      </section>
+
+      <section class="run" id="run" hidden>
+        <div class="question-card">
+          <div class="question-head">
+            <span class="chip" id="mode-chip"></span>
+            <h2 id="question-title"></h2>
+          </div>
+          <p class="question-text" id="question-text"></p>
+        </div>
+
+        <ol class="steps" id="steps">
+          <li data-step="1">질문 전달</li>
+          <li data-step="2">Davi가 난이도 판단</li>
+          <li data-step="3">모델 배정</li>
+          <li data-step="4">풀이</li>
+          <li data-step="5">결과 비교</li>
+        </ol>
+
+        <div class="gauge-card">
+          <div class="gauge-head">
+            <h3>Davi가 본 난이도</h3>
+            <p class="gauge-verdict" id="gauge-verdict">판단 중…</p>
+          </div>
+          <div class="gauge" id="gauge">
+            <div class="zone zone-cheap" id="zone-cheap"><span></span></div>
+            <div class="zone zone-mid" id="zone-mid"><span></span></div>
+            <div class="zone zone-strong" id="zone-strong"><span></span></div>
+            <div class="marker" id="gauge-marker" hidden>
+              <span class="marker-value" id="gauge-value"></span>
+            </div>
+          </div>
+          <div class="gauge-scale"><span>쉬움</span><span>어려움</span></div>
+        </div>
+
+        <div class="lanes">
+          <article class="lane" id="lane-routed"></article>
+          <article class="lane" id="lane-opus"></article>
+        </div>
+
+        <div class="banner" id="banner" hidden></div>
+
+        <div class="judges-card">
+          <h3>다른 판정자였다면?</h3>
+          <p class="fine">원래 질문을 세 판정자에게 똑같이 물었을 때 고른 모델입니다. 실제 배정은
+            메인 에이전트가 서브에이전트에게 넘긴 지시문을 보고 판단하므로 조금 다를 수 있습니다.</p>
+          <div class="judges" id="judges"></div>
+        </div>
+
+        <details class="details">
+          <summary>기술 상세 (토큰 사용량, 이벤트 기록)</summary>
+          <div id="usage"></div>
+          <pre class="event-log" id="event-log"></pre>
+        </details>
+      </section>
+
+      <section class="history" id="history" hidden>
+        <h3>이번 시연 기록</h3>
+        <table>
+          <thead>
+            <tr><th>질문</th><th>Davi 배정</th><th>라우팅 비용</th>
+              <th>항상 opus 비용</th><th>절감</th><th>정답 (라우팅 / opus)</th></tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <template id="lane-template">
+    <header class="lane-head">
+      <h3 class="lane-title"></h3>
+      <span class="lane-sub"></span>
+    </header>
+    <div class="model-badge" data-model="">
+      <span class="model-name">대기 중</span>
+      <span class="model-kind"></span>
+    </div>
+    <p class="lane-status"></p>
+    <dl class="lane-facts">
+      <div><dt>걸린 시간</dt><dd class="fact-time">-</dd></div>
+      <div><dt>비용</dt><dd class="fact-cost">-</dd></div>
+      <div><dt>실제 실행 모델</dt><dd class="fact-model">-</dd></div>
+    </dl>
+    <div class="answer">
+      <span class="answer-mark"></span>
+      <span class="answer-text"></span>
+    </div>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

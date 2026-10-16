@@ -205,6 +205,32 @@ davi-route demo --cache runs/x --tasks runs/x/demo.tasks.jsonl --threshold 0.5
 - `curate`는 **결과를 보고 고른 것**입니다. 그 숫자는 선별된 과제에 대한 것이지 일반 성능 추정이 아니므로, 시연에서는
   "선별 사례"로 표시하세요. 선별 기준은 `*.selection.json`에 남습니다.
 
+## 시연 대시보드 (`davi-route dashboard`)
+
+엔지니어가 아닌 사람에게 "실제로 라우팅이 되고 있다"를 보여주는 로컬 웹 화면입니다(한국어).
+
+```bash
+set -a; source .env; set +a          # DAVI_BASE_URL, (선택) JEV_API_KEY, ANTHROPIC_API_KEY
+davi-route dashboard --tasks demo-candidates/klear_demo.tasks.jsonl --open
+```
+
+- **실시간 실행**: 질문을 고르면 Claude Code 두 개가 `claude -p`로 동시에 풉니다. 메인 모델은 둘 다 sonnet입니다.
+  - 왼쪽(Davi 라우팅): 플러그인 `route_mode=tiers`, Davi가 서브에이전트 지시문의 난이도를 보고 haiku / sonnet / opus 중 하나를 고름
+  - 오른쪽(항상 opus): 같은 플러그인으로 모든 서브에이전트를 opus에 고정(판정자 호출 없음)
+- 화면에 나오는 것: 진행 단계, Davi 난이도 게이지와 기준선, 배정 모델, 실제 실행 모델(`resolvedModel`), 걸린 시간,
+  비용, 채점 결과, 비용 절감률, 같은 원래 질문에 대한 Davi / Jev / Claude 판정 비교, 이번 시연 누적 절감액.
+- **녹화 재생**: 실시간 실행은 모두 `dashboard-recordings/`에 저장되고(질문과 답이 들어 있어 git 제외), 같은 화면으로
+  ×1 / ×2 / ×4 / ×8 재생합니다. 네트워크와 비용이 들지 않습니다. 시연 전에 미리 녹화하려면
+  `davi-route record --tasks ... --yes [--id <task id> ...]`, 재생만 하려면 `--no-live`.
+- 질문 파일(JSONL): `id`, `question`(또는 `prompt`), 선택 `title`, `answer` + `grader`(채점), `note`(목록에 보이는 메모).
+  답이 없거나 직접 입력한 질문은 "채점 없음"으로 표시합니다.
+- 비교 판정자는 키가 있는 것만 기본으로 켜집니다(Davi는 항상, Jev는 `JEV_API_KEY`/`TYPESAFE_API_KEY`, Claude는
+  `ANTHROPIC_API_KEY`). `--judge`로 직접 고를 수 있습니다.
+- 주의: Davi 비교 행은 원래 질문을, 실제 배정은 메인 에이전트가 쓴 서브에이전트 지시문을 판정하므로 값이 조금 다를
+  수 있습니다(라이브 측정에서 평균 +0.04).
+- 비용: 실시간 1회 = `claude -p` 두 세션 + 비교 판정자 호출. `ANTHROPIC_API_KEY`는 Claude 판정자와 `llm` 채점에만
+  쓰이고 세션에는 넘기지 않습니다. 서버는 기본 127.0.0.1에만 열립니다.
+
 ## 비용 회계와 한계
 
 - 비용은 Claude Code `total_cost_usd`(정가 기준 추정)와 판정자 추정치입니다. 청구액이 아닙니다.

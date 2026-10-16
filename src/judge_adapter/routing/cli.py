@@ -14,6 +14,8 @@
   davi-route demo     --cache runs/x [--tasks demo.tasks.jsonl]
   davi-route hooklog  path/to/hooks.jsonl
   davi-route probe    --plugin-dir plugins/davi-route --out runs/probe
+  davi-route dashboard --tasks demo.tasks.jsonl [--no-live]
+  davi-route record   --tasks demo.tasks.jsonl --yes
 
 Every real step spends money (claude -p runs, judge calls). ``generate``
 asks for --yes unless --dry-run.
@@ -27,6 +29,7 @@ import os
 import sys
 
 from . import analysis, harness, probe
+from .dashboard.commands import add_dashboard, add_record
 from .questions import KINDS
 from .verifiers import JUDGES, build_verifier
 
@@ -384,6 +387,8 @@ SUBCOMMANDS = (
     _add_demo,
     _add_hooklog,
     _add_probe,
+    add_dashboard,
+    add_record,
 )
 
 

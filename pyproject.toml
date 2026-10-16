@@ -84,8 +84,10 @@ line-length = 79
 target-version = "py39"
 include = [
     "src/judge_adapter/routing/*.py",
+    "src/judge_adapter/routing/dashboard/*.py",
     "plugins/davi-route/hooks/*.py",
     "tests/test_routing.py",
+    "tests/test_dashboard.py",
 ]
 
 [tool.ruff.lint]

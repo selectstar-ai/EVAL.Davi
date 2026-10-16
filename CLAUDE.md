@@ -1,8 +1,9 @@
 # Coding rules
 
-These rules apply to the routing code: `src/judge_adapter/routing/`, `plugins/davi-route/hooks/` and
-`tests/test_routing.py`. The older modules (`judge_adapter` core, the `davi` filter plugin) are frozen in their own
-style; do not reformat them.
+These rules apply to the routing code: `src/judge_adapter/routing/` (including `dashboard/`),
+`plugins/davi-route/hooks/`, `tests/test_routing.py` and `tests/test_dashboard.py`. The older modules
+(`judge_adapter` core, the `davi` filter plugin) are frozen in their own style; do not reformat them. The dashboard's
+static files (`dashboard/static/`) are HTML, CSS and plain JavaScript without a build step.
 
 Check before every commit:
 

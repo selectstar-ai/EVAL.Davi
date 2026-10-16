@@ -135,6 +135,24 @@ Every option, its effect and the judge prompts: [docs/routing.md](docs/routing.m
 davi-route verify --judge davi --kind tier --task "What is 17*23?" --candidate ""
 ```
 
+## Live demo dashboard
+
+A local web page (Korean, for non-engineers) that shows routing happen inside real Claude Code:
+
+```bash
+davi-route dashboard --tasks demo.tasks.jsonl --open     # http://127.0.0.1:8765/
+```
+
+- **Live run:** pick a question; two headless Claude Code sessions solve it at once, one with Davi routing and one
+  with every subagent pinned to opus. The page shows Davi's difficulty gauge and the model it picked, the model
+  that actually ran (`resolvedModel`), time, cost, the graded answer of both sessions, and where Davi, Jev and
+  Claude would each have sent the same question. A running total of the savings stays in the header.
+- **Replay:** every live run is saved to `dashboard-recordings/` (git-ignored: it holds the question and answers)
+  and can be replayed at ×1–×8 with no network and no cost. `davi-route record --tasks demo.tasks.jsonl --yes`
+  records many questions in a row before a demo; `--no-live` serves replays only.
+- A live run spends money (two `claude -p` sessions plus the comparison judges). The server binds to 127.0.0.1, and
+  `ANTHROPIC_API_KEY` is never passed to the sessions; it is used only by the Claude judge and the `llm` grader.
+
 ## Measuring your own workload
 
 The `davi-route` CLI runs tasks headless, judges them and replays routing policies offline:
@@ -168,10 +186,11 @@ A task line has `id`, `prompt` and either `answer` + `grader` (`contains`, `exac
 | `harness.py` | Tasks, arms, `RunCache`, `claude -p` runs, judging, regrading |
 | `analysis.py` | `ReplayRow`, baselines, sweeps, frozen thresholds, demo tables |
 | `cli.py`, `probe.py` | The `davi-route` command and the hook mechanism probes |
+| `dashboard/` | The live demo dashboard: `DemoRun` (abstract) → `LiveRun` / `ReplayRun`, sessions, recordings, HTTP server, static page |
 
 ```bash
 ruff check && ruff format --check
-pytest tests/test_routing.py
+pytest tests/test_routing.py tests/test_dashboard.py
 ```
 
 ## Legacy: the `davi` search-result filter
