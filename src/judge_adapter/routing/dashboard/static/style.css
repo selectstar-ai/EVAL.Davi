@@ -646,6 +646,9 @@ textarea:focus { outline: 1px solid var(--accent); }
 .bench-tag-haiku .bench-tag-title { fill: var(--haiku); }
 .bench-tag-sonnet .bench-tag-title { fill: var(--sonnet); }
 .bench-tag-opus .bench-tag-title { fill: var(--opus); }
+.bench-level-bar { fill: var(--accent); opacity: 0.85; }
+.bench-level-label { fill: var(--muted); font-family: var(--sans); font-size: 10px; font-weight: 500; text-anchor: middle; }
+.bench-level-share { fill: var(--ink); font-family: var(--sans); font-size: 10.5px; font-weight: 600; text-anchor: middle; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) { .bench-flow.on { animation: none; } }
 
 /* each bench in its own frame */

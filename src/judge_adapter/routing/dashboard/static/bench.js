@@ -50,7 +50,7 @@ const BENCH = (() => {
 })();
 
 const BAY_NAMES = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus' };
-const TIER_MODELS = { cheap: 'haiku', mid: 'sonnet', strong: 'opus' };
+const CUTOFFS = { low: 0.48, high: 0.78 };
 
 function benchSvg(tag, attrs = {}, text) {
   const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -59,19 +59,32 @@ function benchSvg(tag, attrs = {}, text) {
   return node;
 }
 
-// Davi's level probabilities folded into the three models by the same
-// cut-offs the plugin used ({'1': p, ..., '5': p} -> {haiku, sonnet, opus})
-function modelShares(levels, low = 0.48, high = 0.78) {
+// the same rule the plugin uses: Davi's average difficulty (0-1) against
+// the two cut-offs
+function cutoffs(data) {
+  const low = Number.isFinite(data?.tier_low) ? data.tier_low : CUTOFFS.low;
+  const high = Number.isFinite(data?.tier_high) ? data.tier_high : CUTOFFS.high;
+  return { low, high };
+}
+
+function bayRange(model, { low, high }) {
+  if (model === 'haiku') return `${low.toFixed(2)} 미만`;
+  if (model === 'opus') return `${high.toFixed(2)} 이상`;
+  return `${low.toFixed(2)}~${high.toFixed(2)}`;
+}
+
+function ruleText(level, model, { low, high }) {
+  const value = level.toFixed(2);
+  const name = BAY_NAMES[model] || model;
+  if (level >= high) return `평균 ${value} ≥ ${high.toFixed(2)} → ${name}`;
+  if (level < low) return `평균 ${value} < ${low.toFixed(2)} → ${name}`;
+  return `${low.toFixed(2)} ≤ 평균 ${value} < ${high.toFixed(2)} → ${name}`;
+}
+
+function levelList(levels) {
   if (!levels || typeof levels !== 'object') return null;
-  const shares = { haiku: 0, sonnet: 0, opus: 0 };
-  for (let index = 1; index <= 5; index += 1) {
-    const p = Number(levels[String(index)]);
-    if (!Number.isFinite(p)) return null;
-    const level = (index - 1) / 4;
-    const tier = level < low ? 'cheap' : level >= high ? 'strong' : 'mid';
-    shares[TIER_MODELS[tier]] += p;
-  }
-  return shares;
+  const list = [1, 2, 3, 4, 5].map((index) => Number(levels[String(index)]));
+  return list.every(Number.isFinite) ? list : null;
 }
 
 class BenchArt {
@@ -387,10 +400,10 @@ class BenchPanel {
   reset(task) {
     this.build();
     this.light('question', true);
-    this.setTag('question', (task.title || '').slice(0, 14) || '입력', 'active');
+    this.setTag('question', (task.title || '').slice(0, 8) || '입력', 'active');
   }
 
-  // --- tags: name, time and probability at each station ----------------------
+  // --- tags: name, time and range at each station --------------------------
   buildTags() {
     const { STATION, BAYS, DAVI } = BENCH;
     this.tags = {};
@@ -410,17 +423,41 @@ class BenchPanel {
     add('question', station('question'), 'up', '질문', '대기', 8);
     add('main', station('main'), 'up', '메인 에이전트 · 계획', '-', 52);
     add('agent', station('agent'), 'up', 'Agent 호출', '-', 8);
-    add('hook', station('hook'), 'up', this.routed ? 'PreToolUse 훅 · 우리 플러그인' : 'PreToolUse 훅 · opus 고정', '-', 52);
+    add('hook', station('hook'), 'up', this.routed ? 'PreToolUse 훅 · 우리 플러그인' : 'PreToolUse 훅 · opus 고정', '-', 58);
     for (const [model, x] of Object.entries(BAYS)) {
       const used = this.routed || model === 'opus';
-      add(model, below(x), 'down', `${BAY_NAMES[model]} 서브에이전트`, used ? '-' : '사용 안 함', model === 'sonnet' ? 54 : 10);
+      const value = this.routed ? `난이도 ${bayRange(model, CUTOFFS)}` : used ? '-' : '사용 안 함';
+      add(model, below(x), 'down', `${BAY_NAMES[model]} 서브에이전트`, value, model === 'sonnet' ? 54 : 8);
     }
-    add('collect', below(STATION.collect.x), 'down', '메인 에이전트 · 취합', '-', 54);
+    add('collect', below(STATION.collect.x), 'down', '메인 에이전트 · 취합', '-', 56);
     add('final', below(STATION.final.x), 'down', '최종 답변', '-', 10);
-    if (this.routed) add('davi', [DAVI.x, DAVI.y, DAVI.top], 'up', 'Davi 판정 모델 · 우리 것', '대기', 22);
+    if (this.routed) {
+      add('davi', [DAVI.x, DAVI.y, DAVI.top], 'up', 'Davi 판정 모델 · 우리 것', '대기', 22);
+      this.addLevelBars(this.tags.davi);
+    }
     const relayout = () => Object.keys(this.tags).forEach((key) => this.layoutTag(key));
     requestAnimationFrame(relayout);
     document.fonts?.ready.then(relayout);
+  }
+
+  // five small columns in the Davi tag: P(level 1) ... P(level 5)
+  addLevelBars(tag) {
+    tag.bars = [1, 2, 3, 4, 5].map((index) => {
+      const bar = benchSvg('rect', { class: 'bench-level-bar', rx: 1.5 });
+      const label = benchSvg('text', { class: 'bench-level-label' }, `${index}단계`);
+      const share = benchSvg('text', { class: 'bench-level-share' });
+      label.style.display = 'none';
+      tag.group.append(bar, label, share);
+      return { bar, label, share };
+    });
+    tag.levels = null;
+  }
+
+  setLevels(levels) {
+    const tag = this.tags.davi;
+    if (!tag?.bars) return;
+    tag.levels = levelList(levels);
+    this.layoutTag('davi');
   }
 
   layoutTag(key) {
@@ -435,9 +472,13 @@ class BenchPanel {
     } catch (error) {
       width = 80;
     }
-    const height = 36;
+    const bars = tag.bars && tag.levels ? tag.bars : null;
+    const column = 40;
+    const gap = 4;
+    if (bars) width = Math.max(width, bars.length * column + (bars.length - 1) * gap + pad * 2);
+    const height = bars ? 94 : 36;
     const top = tag.side === 'up' ? ay - lift - height : ay + lift;
-    const left = ax - width / 2;
+    const left = Math.min(Math.max(ax - width / 2, 4), BENCH.WIDTH - width - 4);
     tag.box.setAttribute('x', left.toFixed(1));
     tag.box.setAttribute('y', top.toFixed(1));
     tag.box.setAttribute('width', width.toFixed(1));
@@ -446,6 +487,21 @@ class BenchPanel {
     tag.name.setAttribute('y', (top + 14).toFixed(1));
     tag.text.setAttribute('x', (left + pad).toFixed(1));
     tag.text.setAttribute('y', (top + 30).toFixed(1));
+    for (const [index, { bar, label, share: percent }] of (tag.bars || []).entries()) {
+      const share = bars ? tag.levels[index] : 0;
+      const tall = bars ? Math.max(1, share * 24) : 0;
+      const x = left + pad + index * (column + gap);
+      bar.setAttribute('x', x.toFixed(1));
+      bar.setAttribute('y', (top + 64 - tall).toFixed(1));
+      bar.setAttribute('width', column);
+      bar.setAttribute('height', tall.toFixed(1));
+      label.setAttribute('x', (x + column / 2).toFixed(1));
+      label.setAttribute('y', (top + 76).toFixed(1));
+      label.style.display = bars ? '' : 'none';
+      percent.setAttribute('x', (x + column / 2).toFixed(1));
+      percent.setAttribute('y', (top + 88).toFixed(1));
+      percent.textContent = bars ? `${Math.round(share * 100)}%` : '';
+    }
     const edge = tag.side === 'up' ? top + height : top;
     tag.line.setAttribute('d', `M${ax.toFixed(1)} ${ay.toFixed(1)}L${ax.toFixed(1)} ${edge.toFixed(1)}`);
   }
@@ -634,8 +690,7 @@ class BenchPanel {
     call.model = model;
     const level = typeof data.level === 'number' ? data.level : null;
     const hookStart = this.sessionSeconds(data.ts);
-    const shares = this.routed ? modelShares(data.level_probabilities, data.tier_low, data.tier_high) : null;
-    call.shares = shares;
+    const range = cutoffs(data);
     this.queue(async () => {
       const puck = this.current || this.puck('back');
       this.current = null;
@@ -662,9 +717,11 @@ class BenchPanel {
         this.light('davi', true);
         this.daviTarget = level == null ? 0 : level;
         await this.wait(650);
-        this.setTag('davi', level == null ? '판정 실패 → 기본 모델' : `${secondsText(data.latency_s)} · 난이도 ${level.toFixed(2)}`, 'done');
+        const verdict = level == null ? '판정 실패 → 기본 모델' : ruleText(level, model, range);
+        this.setTag('davi', verdict, 'done', `Davi 판정 모델 · ${secondsText(data.latency_s)}`);
+        this.setLevels(data.level_probabilities);
         for (const name of Object.keys(BAYS)) {
-          const value = shares ? `확률 ${Math.round(shares[name] * 100)}%` : name === model ? '선택됨' : '-';
+          const value = `${name === model ? '선택됨 · ' : ''}난이도 ${bayRange(name, range)}`;
           this.setTag(name, value, name === model ? 'chosen' : 'idle');
         }
         await this.pulse(420);
@@ -704,10 +761,8 @@ class BenchPanel {
       const model = call.model;
       const x = BAYS[model];
       this.stopClock(model);
-      const parts = [];
-      if (call.shares) parts.push(`${Math.round(call.shares[model] * 100)}%`);
-      if (typeof data.subagent_ms === 'number') parts.push(secondsText(data.subagent_ms / 1000));
-      this.setTag(model, parts.join(' · ') || '완료', 'chosen');
+      const time = typeof data.subagent_ms === 'number' ? ` · ${secondsText(data.subagent_ms / 1000)}` : '';
+      this.setTag(model, `${this.routed ? '선택됨' : '완료'}${time}`, 'chosen');
       this.light(model, false);
       this.lamp(model, false);
       const puck = this.puck('front');
