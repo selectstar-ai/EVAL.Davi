@@ -79,16 +79,20 @@ claude plugin marketplace add selectstar-ai/EVAL.Davi
 claude plugin install davi-route@datumo
 ```
 
-Then, in any Claude Code session (CLI or app), point it at your Davi server. This turns routing on (`tiers` mode)
-and checks that the server answers:
+Then, in Claude Code (the terminal or the desktop app's **Code tab**), point it at your Davi server. This turns
+routing on (`tiers` mode) and checks that the server answers:
 
 ```
 /davi-route:setup http://<your-davi-host>:<port>
 ```
 
-Everything is off until then. The claude.ai plugin page has no fields for plugin options, so the command writes them to
+`setup` is a skill, so asking in words also works ("use the Davi server at http://host:port for davi-route"); approve
+the `python3 .../configure.py` run when asked. The plugin works only where hooks run: Claude Code and Cowork. In a
+regular claude.ai chat, hooks and subagents do not run, so nothing is routed there.
+
+Everything is off until then. The claude.ai plugin page has no fields for plugin options, so the skill writes them to
 `~/.claude/davi-route.json` instead. The hooks read that file on every call, so it applies from the next subagent call.
-Change or inspect options with the same command (`--mode post`, `--judge claude`, `--set log_file=/tmp/route.jsonl`,
+Change or inspect options the same way (`--mode post`, `--judge claude`, `--set log_file=/tmp/route.jsonl`,
 `--off`, `--show`). Option precedence: `DAVI_ROUTE_<KEY>` environment variables (also from the `env` block of Claude
 Code's `settings.json`), then `~/.claude/davi-route.json`, then the plugin options (`claude plugin configure`).
 

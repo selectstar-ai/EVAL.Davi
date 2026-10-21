@@ -91,8 +91,13 @@ davi-route verify --judge jev --task "What is 17*23?" --candidate "It is 390."
 /davi-route:setup http://<Davi 서버>:<포트>
 ```
 
+`setup`은 스킬이라 말로 요청해도 됩니다("davi-route가 Davi 서버 http://…:20100을 쓰도록 설정해줘"). 실행 승인을 물으면
+`python3 …/configure.py` 실행을 허용하세요. 훅이 도는 곳(Claude Code: 터미널, 데스크톱 앱 Code 탭, 그리고 Cowork)에서만
+동작하며, claude.ai 일반 채팅에서는 훅과 서브에이전트가 돌지 않아 라우팅되지 않습니다. 슬래시 명령(`commands/`의 `!`
+미리 실행)이 아니라 스킬인 이유는 claude.ai에서 동기화된 설치본이 `!` 줄을 실행하지 않기 때문입니다.
+
 claude.ai 플러그인 화면에는 옵션 입력 칸이 없어서, 이 명령이 옵션을 `~/.claude/davi-route.json`에 씁니다. hook이
-호출될 때마다 이 파일을 읽으므로 다음 서브에이전트 호출부터 적용됩니다. 같은 명령으로 바꾸거나 확인합니다
+호출될 때마다 이 파일을 읽으므로 다음 서브에이전트 호출부터 적용됩니다. 같은 방법으로 바꾸거나 확인합니다
 (`--mode post`, `--judge claude`, `--set log_file=/tmp/route.jsonl`, `--off`, `--show`).
 
 설치본에는 `plugins/davi-route`만 복사되므로 플러그인이 스스로 필요한 것을 갖고 있습니다.
