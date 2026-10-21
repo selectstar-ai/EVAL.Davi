@@ -9,10 +9,24 @@ git clone --branch feat/route-dashboard --single-branch https://github.com/selec
 cd EVAL.Davi
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
 이미 clone한 경우 해당 checkout의 변경을 먼저 보존한 뒤 브랜치를 선택하고 `git pull --ff-only`로 갱신하세요. 명령은 저장소 루트에서 실행합니다. 실시간 실행은 `plugins/davi-route`를 사용하므로 패키지만 설치한 디렉터리가 아니라 이 clone이 필요합니다.
+
+이 프로젝트는 `setup.py` 대신 `pyproject.toml`과 Hatchling을 사용합니다. 오래된 pip는 이 형식의 editable 설치를 지원하지 않아 `setup.py`가 없다는 오류를 낼 수 있으므로, 위의 pip 업그레이드를 먼저 실행하세요. `setup.py`를 새로 만들 필요는 없습니다.
+
+같은 오류가 계속되면 아래로 위치와 환경을 확인하세요.
+
+```bash
+python --version
+python -m pip --version
+python -c "from pathlib import Path; print('directory:', Path.cwd()); print('pyproject.toml:', Path('pyproject.toml').is_file())"
+git branch --show-current
+```
+
+`pyproject.toml`이 `False`면 clone한 저장소 루트로 이동해야 합니다. 브랜치는 `feat/route-dashboard`여야 하며 pip 경로는 활성 가상환경을 가리켜야 합니다. 업그레이드가 실패했다면 설치를 계속하기 전에 그 오류를 확인하세요.
 
 ## 2. 키 없이 화면 확인 — 모의 녹화 재생
 
