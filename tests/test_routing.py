@@ -11,6 +11,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -940,6 +941,69 @@ def test_launcher_fast_path_and_probe(tmp_path):
     assert result.returncode == 0 and result.stdout == ''
     last = json.loads(result.stderr.strip().splitlines()[-1])
     assert last['outcome'] == 'local_config'
+
+
+def test_launcher_finds_src_in_the_marketplace_clone(tmp_path):
+    # a marketplace install: only plugins/davi-route is copied to the cache;
+    # the marketplace itself is a full clone of the repository
+    base = tmp_path / 'plugins'
+    hooks_dir = base / 'cache' / 'datumo' / 'davi-route' / '0.5.0' / 'hooks'
+    hooks_dir.mkdir(parents=True)
+    launcher = hooks_dir / 'route_hook.py'
+    shutil.copy(LAUNCHER, launcher)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_'))
+    }
+    env.update(
+        {
+            'CLAUDE_PLUGIN_DATA': str(tmp_path / 'data'),
+            'DAVI_ROUTE_PROBE': '1',
+            'DAVI_ROUTE_PROBE_NONCE': 'M',
+        }
+    )
+
+    def run():
+        return subprocess.run(
+            [sys.executable, str(launcher), 'post'],
+            input=json.dumps(agent_payload('PostToolUse')),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+
+    def probe_ran(result):
+        output = json.loads(result.stdout)['hookSpecificOutput']
+        return 'DAVI-PROBE-A-M' in output['additionalContext']
+
+    result = run()
+    assert result.returncode == 0 and result.stdout == ''
+    last = json.loads(result.stderr.strip().splitlines()[-1])
+    assert last['status'] == 'src_missing'
+    # a git or GitHub marketplace: cloned to <plugins>/marketplaces/<name>
+    clone = base / 'marketplaces' / 'datumo'
+    clone.mkdir(parents=True)
+    (clone / 'src').symlink_to(ROOT / 'src', target_is_directory=True)
+    assert probe_ran(run())
+    # a directory marketplace: installLocation is the checkout itself
+    shutil.rmtree(base / 'marketplaces')
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
+    (checkout / 'src').symlink_to(ROOT / 'src', target_is_directory=True)
+    known = {'datumo': {'installLocation': str(checkout)}}
+    (base / 'known_marketplaces.json').write_text(json.dumps(known))
+    assert probe_ran(run())
+
+
+def test_marketplace_lists_the_plugin():
+    path = ROOT / '.claude-plugin' / 'marketplace.json'
+    market = json.loads(path.read_text(encoding='utf-8'))
+    entries = {entry['name']: entry for entry in market['plugins']}
+    manifest = PLUGIN / '.claude-plugin' / 'plugin.json'
+    plugin = json.loads(manifest.read_text(encoding='utf-8'))
+    assert entries[plugin['name']]['source'] == './plugins/davi-route'
 
 
 def test_plugin_manifest_matches_settings():

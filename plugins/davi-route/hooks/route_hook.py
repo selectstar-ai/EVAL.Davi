@@ -8,9 +8,12 @@ form)::
 
     python3 ${CLAUDE_PLUGIN_ROOT}/hooks/route_hook.py <pre|post|stop|...>
 
-- Finds the repository's ``src`` by walking up from this file (the plugin
-  lives in ``plugins/davi-route`` of the EVAL.Davi checkout), or uses
-  ``DAVI_ROUTE_SRC`` if set.
+- Finds the repository's ``src``: ``DAVI_ROUTE_SRC`` if set, else by walking
+  up from this file (``--plugin-dir plugins/davi-route`` in a checkout),
+  else in the marketplace's copy of the repository. A marketplace install
+  copies only ``plugins/davi-route`` to
+  ``<plugins>/cache/<marketplace>/davi-route/<version>/``, while the
+  marketplace itself is the whole repository (its ``installLocation``).
 - Fast path: if the hook's feature is off (``route_enabled`` for pre/post,
   ``stop_verify_enabled`` for stop) and probe mode is off, it exits 0
   before reading stdin or importing anything.
@@ -50,17 +53,61 @@ def feature_on(kind):
     return _opt(key) not in OFF_WORDS
 
 
+def _has_routing(src):
+    return os.path.isdir(os.path.join(src, 'judge_adapter', 'routing'))
+
+
+def _install_location(plugins_dir, name):
+    path = os.path.join(plugins_dir, 'known_marketplaces.json')
+    try:
+        with open(path, encoding='utf-8') as file:
+            entry = json.load(file).get(name)
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(entry, dict):
+        return None
+    location = entry.get('installLocation')
+    return location if isinstance(location, str) else None
+
+
+def _marketplace_src(here):
+    """``src`` in the marketplace's copy of the repository.
+
+    ``here`` is ``<plugins>/cache/<marketplace>/<plugin>/<version>/hooks``
+    for an installed plugin. The marketplace lives at its
+    ``installLocation`` in ``<plugins>/known_marketplaces.json`` (a local
+    directory marketplace points at the checkout itself), by default
+    ``<plugins>/marketplaces/<marketplace>``.
+    """
+    version_dir = os.path.dirname(here)
+    market_dir = os.path.dirname(os.path.dirname(version_dir))
+    cache_dir = os.path.dirname(market_dir)
+    if os.path.basename(cache_dir) != 'cache':
+        return None
+    plugins_dir = os.path.dirname(cache_dir)
+    name = os.path.basename(market_dir)
+    roots = (
+        _install_location(plugins_dir, name),
+        os.path.join(plugins_dir, 'marketplaces', name),
+    )
+    for root in roots:
+        if root and _has_routing(os.path.join(root, 'src')):
+            return os.path.join(root, 'src')
+    return None
+
+
 def find_src():
     configured = os.environ.get('DAVI_ROUTE_SRC', '').strip()
     if configured and os.path.isdir(os.path.join(configured, 'judge_adapter')):
         return configured
-    directory = os.path.dirname(os.path.abspath(__file__))
+    here = os.path.dirname(os.path.abspath(__file__))
+    directory = here
     for _ in range(6):
         candidate = os.path.join(directory, 'src')
-        if os.path.isdir(os.path.join(candidate, 'judge_adapter', 'routing')):
+        if _has_routing(candidate):
             return candidate
         directory = os.path.dirname(directory)
-    return None
+    return _marketplace_src(here)
 
 
 def _venv_python():
@@ -104,7 +151,8 @@ def main(kind):
         _note(
             kind,
             'src_missing',
-            'could not find src/judge_adapter/routing; set DAVI_ROUTE_SRC',
+            'could not find src/judge_adapter/routing (checkout or '
+            'marketplace clone); set DAVI_ROUTE_SRC',
         )
         return 0
     sys.path.insert(0, src)

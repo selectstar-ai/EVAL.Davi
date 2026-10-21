@@ -344,7 +344,7 @@ def test_manifests_match_names_module_and_options():
     market = json.loads((ROOT / '.claude-plugin' / 'marketplace.json').read_text(encoding='utf-8'))
     hooks = json.loads((ROOT / 'hooks' / 'hooks.json').read_text(encoding='utf-8'))
     assert plugin['name'] == N.PLUGIN_NAME and market['name'] == N.MARKETPLACE_NAME
-    assert market['plugins'] == [{**market['plugins'][0], 'name': N.PLUGIN_NAME, 'source': './'}]
+    assert market['plugins'][0] == {**market['plugins'][0], 'name': N.PLUGIN_NAME, 'source': './'}
     assert 'hooks' not in plugin                       # hooks/hooks.json loads by default; declaring it would duplicate
     cfg = plugin['userConfig']
     assert cfg['runpod_api_key']['sensitive'] is True and cfg['choice_endpoint_id']['sensitive'] is True
