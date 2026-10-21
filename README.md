@@ -137,10 +137,14 @@ davi-route verify --judge davi --kind tier --task "What is 17*23?" --candidate "
 
 ## Live demo dashboard
 
-A local web page (Korean, for non-engineers) that shows routing happen inside real Claude Code:
+A local web page (Korean, for non-engineers) that shows routing happen inside real Claude Code.
+For a fresh computer, follow [the setup and offline replay guide](docs/dashboard-quickstart.md).
+The repository includes synthetic replay data; no local recordings or API keys are needed to try the UI.
+
+After installing and configuring live access:
 
 ```bash
-davi-route dashboard --tasks demo.tasks.jsonl --open     # http://127.0.0.1:8765/
+davi-route dashboard --tasks examples/dashboard/tasks.jsonl --open
 ```
 
 - **Live run:** pick a question; two headless Claude Code sessions solve it at once, both with the same main

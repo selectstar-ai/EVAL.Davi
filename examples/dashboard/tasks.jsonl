@@ -1,0 +1,2 @@
+{"id": "sample-capital", "title": "샘플: 대한민국의 수도", "question": "대한민국의 수도는 어디인가요?", "answer": "서울", "grader": "contains", "note": "실행 확인용 예제이며 성능 평가 데이터가 아닙니다."}
+{"id": "sample-arithmetic", "title": "샘플: 곱셈", "question": "17 곱하기 23은 얼마인가요?", "answer": "391", "grader": "contains", "note": "실행 확인용 예제이며 특정 라우팅 결과를 보장하지 않습니다."}

@@ -207,11 +207,13 @@ davi-route demo --cache runs/x --tasks runs/x/demo.tasks.jsonl --threshold 0.5
 
 ## 시연 대시보드 (`davi-route dashboard`)
 
+다른 컴퓨터 설치와 키 없는 재생은 [빠른 시작](dashboard-quickstart.md)을 참고하세요.
+
 엔지니어가 아닌 사람에게 "실제로 라우팅이 되고 있다"를 보여주는 로컬 웹 화면입니다(한국어).
 
 ```bash
 set -a; source .env; set +a          # DAVI_BASE_URL, (선택) JEV_API_KEY, ANTHROPIC_API_KEY
-davi-route dashboard --tasks demo-candidates/klear_demo.tasks.jsonl --open
+davi-route dashboard --tasks examples/dashboard/tasks.jsonl --open
 ```
 
 - **실시간 실행**: 질문을 고르면 Claude Code 두 개가 `claude -p`로 동시에 풉니다. 메인 에이전트는 둘 다 sonnet입니다
