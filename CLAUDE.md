@@ -48,6 +48,9 @@ PYTHONPATH=src pytest -q
 - An installed plugin is self-contained: its code comes from `plugins/davi-route/lib`, and the SessionStart `setup`
   installs only `httpx` (into `${CLAUDE_PLUGIN_DATA}/pydeps`), only when a feature is on and `auto_install_deps` is not
   off.
+- Option precedence: `DAVI_ROUTE_<KEY>` variables, then `~/.claude/davi-route.json` (written by `/davi-route:setup`,
+  read by the launcher on every call), then userConfig. The claude.ai plugin page has no option fields, so the command
+  is the supported way to configure an installed plugin.
 - `plugin.json` userConfig keys must exist on `Settings` with the same defaults (checked by a test).
 - Run `davi-route generate` without `ANTHROPIC_API_KEY` in the environment: `claude -p` would bill that key instead
   of the logged-in plan.

@@ -1,6 +1,6 @@
 {
   "name": "davi-route",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "EXPERIMENTAL routing hooks for measuring a verifier inside Claude Code. Pick route_mode: post (cheap subagent first, a verifier checks its result and asks for a strong re-run when needed), pre (a verifier reads the task before the subagent runs and sends it to the cheap or the strong model directly) both (route up front, then verify what went to the cheap model) or tiers (rate difficulty, pick the cheap, mid or strong model). B: at Stop, a verifier checks completion and can block the stop once. All off by default and fail-open. Install as davi-route@datumo, or load with --plugin-dir from an EVAL.Davi checkout.",
   "author": {
     "name": "hundredeuk2",
