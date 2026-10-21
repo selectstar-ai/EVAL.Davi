@@ -84,9 +84,16 @@ davi-route verify --judge jev --task "What is 17*23?" --candidate "It is 390."
 ## Claude Code 개입 (A / E / B)
 
 플러그인은 `plugins/davi-route`에 있습니다. `datumo` marketplace에서 `davi-route@datumo`로 설치하거나(CLI, Claude
-앱 모두), 체크아웃에서 `--plugin-dir`로 불러옵니다. 설치본에는 `plugins/davi-route`만 복사되므로, hook은 라우팅 코드를
-marketplace가 받아 둔 레포 사본(`~/.claude/plugins/marketplaces/datumo/src`)에서 찾습니다(`DAVI_ROUTE_SRC`가 있으면
-그 경로 우선).
+앱 모두), 체크아웃에서 `--plugin-dir`로 불러옵니다. 설치 후 옵션 화면에서 켜야 동작합니다(전부 기본 꺼짐).
+
+설치본에는 `plugins/davi-route`만 복사되므로 플러그인이 스스로 필요한 것을 갖고 있습니다.
+
+- 라우팅 코드: `plugins/davi-route/lib`에 hook이 쓰는 `judge_adapter` 모듈의 사본이 들어 있습니다(`davi-route bundle`로
+  생성, 직접 고치지 않음, 낡으면 테스트 실패). hook은 `DAVI_ROUTE_SRC` → 위쪽 체크아웃의 `src`(개발용) → `lib` →
+  marketplace 레포 사본 순서로 찾습니다.
+- `httpx`: 세션 시작(SessionStart) 때 기능이 켜져 있고 `python3`가 `httpx`를 못 불러오면
+  `pip install --target ${CLAUDE_PLUGIN_DATA}/pydeps "httpx>=0.24,<1"`을 한 번 실행합니다(네트워크 필요). 옵션
+  `auto_install_deps`(기본 켜짐)로 끕니다. 설치에 실패하면 hook은 아무것도 바꾸지 않고 통과합니다.
 
 ```bash
 claude --plugin-dir plugins/davi-route          # 대화형

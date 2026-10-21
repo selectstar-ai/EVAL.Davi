@@ -8,30 +8,38 @@ form)::
 
     python3 ${CLAUDE_PLUGIN_ROOT}/hooks/route_hook.py <pre|post|stop|...>
 
-- Finds the repository's ``src``: ``DAVI_ROUTE_SRC`` if set, else by walking
-  up from this file (``--plugin-dir plugins/davi-route`` in a checkout),
-  else in the marketplace's copy of the repository. A marketplace install
-  copies only ``plugins/davi-route`` to
-  ``<plugins>/cache/<marketplace>/davi-route/<version>/``, while the
-  marketplace itself is the whole repository (its ``installLocation``).
+- Finds the ``judge_adapter`` code, first match wins: ``DAVI_ROUTE_SRC``;
+  the ``src`` of a checkout above this file (``--plugin-dir``, so edits in
+  ``src`` take effect); the plugin's own copy in ``lib`` (what a
+  marketplace install runs: it copies only ``plugins/davi-route``); the
+  ``src`` of the marketplace's copy of the repository.
 - Fast path: if the hook's feature is off (``route_enabled`` for pre/post,
-  ``stop_verify_enabled`` for stop) and probe mode is off, it exits 0
-  before reading stdin or importing anything.
-- Needs httpx for real verifier calls: if ``python3`` cannot import it,
-  ``${CLAUDE_PLUGIN_DATA}/venv`` is tried; otherwise it logs
-  ``dependency_missing`` and exits 0 (fail-open). Never installs anything.
+  ``stop_verify_enabled`` for stop, either for setup) and probe mode is
+  off, it exits 0 before reading stdin or importing anything.
+- Needs httpx for real verifier calls. ``setup`` (SessionStart) installs it
+  with ``pip install --target ${CLAUDE_PLUGIN_DATA}/pydeps`` when a feature
+  is on, ``python3`` cannot import it and ``auto_install_deps`` is not off.
+  The hooks add that directory to ``sys.path``; ``${CLAUDE_PLUGIN_DATA}/venv``
+  is still tried. Without httpx a hook logs ``dependency_missing`` and exits
+  0 (fail-open).
 """
 
 import json
 import os
+import subprocess
 import sys
+import time
 
-KINDS = ('pre', 'post', 'stop', 'subagent_stop')
+KINDS = ('pre', 'post', 'stop', 'subagent_stop', 'setup')
 REEXEC_GUARD = '_DAVI_ROUTE_HOOK_REEXEC'
 OPTION_PREFIXES = ('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_')
 TRUE_WORDS = ('1', 'true', 'yes', 'on')
 OFF_WORDS = ('', '0', 'false', 'no', 'off')
 VENV_PYTHONS = (('venv', 'bin', 'python'), ('venv', 'Scripts', 'python.exe'))
+DEPENDENCY = 'httpx>=0.24,<1'
+DEPS_DIR = 'pydeps'
+SETUP_LOCK_SECONDS = 600
+PIP_TIMEOUT_SECONDS = 180
 
 
 def _opt(key):
@@ -42,15 +50,22 @@ def _opt(key):
     return ''
 
 
-def feature_on(kind):
-    if _opt('probe') in TRUE_WORDS:
-        return True
-    if kind in ('pre', 'post'):
-        key = 'route_enabled'
-    else:
-        key = 'stop_verify_enabled'
+def _on(key):
     # an invalid value runs main(), which reports it
     return _opt(key) not in OFF_WORDS
+
+
+def feature_on(kind):
+    if _opt('probe') in TRUE_WORDS:
+        return kind != 'setup'
+    if kind == 'setup':
+        enabled = _on('route_enabled') or _on('stop_verify_enabled')
+        # auto_install_deps defaults to on: only an explicit off disables it
+        install = not _opt('auto_install_deps') or _on('auto_install_deps')
+        return enabled and install
+    if kind in ('pre', 'post'):
+        return _on('route_enabled')
+    return _on('stop_verify_enabled')
 
 
 def _has_routing(src):
@@ -107,6 +122,9 @@ def find_src():
         if _has_routing(candidate):
             return candidate
         directory = os.path.dirname(directory)
+    bundled = os.path.join(os.path.dirname(here), 'lib')
+    if _has_routing(bundled):
+        return bundled
     return _marketplace_src(here)
 
 
@@ -121,6 +139,17 @@ def _venv_python():
     return None
 
 
+def _deps_dir():
+    data = os.environ.get('CLAUDE_PLUGIN_DATA')
+    return os.path.join(data, DEPS_DIR) if data else None
+
+
+def _add_deps_path():
+    deps = _deps_dir()
+    if deps and os.path.isdir(deps) and deps not in sys.path:
+        sys.path.insert(0, deps)
+
+
 def _note(kind, status, detail):
     record = {
         'event': 'davi-route',
@@ -131,9 +160,100 @@ def _note(kind, status, detail):
     sys.stderr.write(json.dumps(record) + '\n')
 
 
+def _take_lock(path, now):
+    """One installer at a time; a lock older than the limit is stale."""
+    try:
+        os.mkdir(path)
+        return True
+    except FileExistsError:
+        try:
+            if now - os.path.getmtime(path) < SETUP_LOCK_SECONDS:
+                return False
+            os.rmdir(path)
+            os.mkdir(path)
+            return True
+        except OSError:
+            return False
+
+
+def install_dependency(deps, run=subprocess.run, python=None, now=time.time):
+    """pip-install httpx into ``deps``. -> (status, detail); never raises."""
+    python = python or sys.executable
+    parent = os.path.dirname(deps)
+    lock = deps + '.lock'
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError as error:
+        return 'install_failed', type(error).__name__
+    if not _take_lock(lock, now()):
+        return 'install_busy', 'another session is installing'
+    base = [
+        python,
+        '-m',
+        'pip',
+        'install',
+        '--quiet',
+        '--disable-pip-version-check',
+        '--no-input',
+        '--upgrade',
+        '--target',
+        deps,
+        DEPENDENCY,
+    ]
+    try:
+        detail = ''
+        # --target leaves the system packages alone; some Pythons still
+        # refuse (PEP 668) unless told so
+        for extra in ([], ['--break-system-packages']):
+            try:
+                result = run(
+                    base + extra,
+                    capture_output=True,
+                    text=True,
+                    timeout=PIP_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.SubprocessError) as error:
+                return 'install_failed', type(error).__name__
+            if result.returncode == 0:
+                return 'installed', f'{DEPENDENCY} -> {deps}'
+            detail = (result.stderr or '').strip().splitlines()[-1:]
+            detail = detail[0][:200] if detail else f'pip {result.returncode}'
+        return 'install_failed', detail
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+
+
+def setup(kind):
+    import importlib.util
+
+    _add_deps_path()
+    if importlib.util.find_spec('httpx') is not None:
+        return 0
+    python = _venv_python()
+    if python:
+        check = subprocess.run(
+            [python, '-c', 'import httpx'], capture_output=True, timeout=30
+        )
+        if check.returncode == 0:
+            return 0
+    deps = _deps_dir()
+    if deps is None:
+        _note(kind, 'install_failed', 'CLAUDE_PLUGIN_DATA is not set')
+        return 0
+    status, detail = install_dependency(deps)
+    _note(kind, status, detail)
+    return 0
+
+
 def main(kind):
     import importlib.util
 
+    if kind == 'setup':
+        return setup(kind)
+    _add_deps_path()
     if importlib.util.find_spec('httpx') is None:
         python = _venv_python()
         if python and not os.environ.get(REEXEC_GUARD):
@@ -142,8 +262,8 @@ def main(kind):
         _note(
             kind,
             'dependency_missing',
-            'httpx is not importable by python3 '
-            '(pip install "httpx>=0.24,<1")',
+            'httpx is not importable by python3 (turn auto_install_deps on '
+            'and start a new session, or pip install "httpx>=0.24,<1")',
         )
         return 0
     src = find_src()
@@ -151,7 +271,7 @@ def main(kind):
         _note(
             kind,
             'src_missing',
-            'could not find src/judge_adapter/routing (checkout or '
+            'could not find judge_adapter (checkout, plugin lib or '
             'marketplace clone); set DAVI_ROUTE_SRC',
         )
         return 0
