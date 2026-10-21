@@ -71,11 +71,21 @@ Caveats, stated plainly:
 
 ## Install
 
-Python 3.9+ with `httpx`. The plugin loads from a checkout of this repository (it is not in a marketplace).
+Python 3.9+ with `httpx`. Install the plugin from the `datumo` marketplace (this repository), in the CLI or in the
+Claude app's plugin settings:
+
+```bash
+claude plugin marketplace add selectstar-ai/EVAL.Davi
+claude plugin install davi-route@datumo
+```
+
+The installed copy holds only `plugins/davi-route`; its hook loads the routing code from the marketplace's clone of
+this repository (or from `DAVI_ROUTE_SRC` if set). For development, load it from a checkout instead:
 
 ```bash
 git clone https://github.com/selectstar-ai/EVAL.Davi && cd EVAL.Davi
 pip install -e ".[test,lint]"
+claude --plugin-dir plugins/davi-route
 ```
 
 The hook runs `python3`; if that interpreter cannot import `httpx`, the hook tries `${CLAUDE_PLUGIN_DATA}/venv` and

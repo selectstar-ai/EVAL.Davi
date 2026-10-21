@@ -83,7 +83,10 @@ davi-route verify --judge jev --task "What is 17*23?" --candidate "It is 390."
 
 ## Claude Code 개입 (A / E / B)
 
-플러그인은 `plugins/davi-route`에 있고, `--plugin-dir`로 불러옵니다 (marketplace에는 등록하지 않음).
+플러그인은 `plugins/davi-route`에 있습니다. `datumo` marketplace에서 `davi-route@datumo`로 설치하거나(CLI, Claude
+앱 모두), 체크아웃에서 `--plugin-dir`로 불러옵니다. 설치본에는 `plugins/davi-route`만 복사되므로, hook은 라우팅 코드를
+marketplace가 받아 둔 레포 사본(`~/.claude/plugins/marketplaces/datumo/src`)에서 찾습니다(`DAVI_ROUTE_SRC`가 있으면
+그 경로 우선).
 
 ```bash
 claude --plugin-dir plugins/davi-route          # 대화형
