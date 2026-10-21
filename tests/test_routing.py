@@ -1113,6 +1113,139 @@ def test_setup_runs_only_when_a_feature_is_on(monkeypatch):
     assert not launcher.feature_on('setup') and launcher.feature_on('post')
 
 
+def load_configure():
+    path = PLUGIN / 'hooks' / 'configure.py'
+    spec = importlib.util.spec_from_file_location('configure_test', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_options_file_fills_unset_variables(tmp_path, monkeypatch):
+    launcher = load_launcher()
+    path = tmp_path / 'davi-route.json'
+    options = {
+        'route_enabled': True,
+        'route_mode': 'post',
+        'route_agent_types': ['a', 'b'],
+        'Bad-Key': 'x',
+        'log_file': None,
+    }
+    path.write_text(json.dumps(options))
+    environ = {'DAVI_ROUTE_CONFIG': str(path), 'DAVI_ROUTE_ROUTE_MODE': 'pre'}
+    monkeypatch.setattr(launcher.os, 'environ', environ)
+    launcher.load_config_file()
+    assert environ['DAVI_ROUTE_ROUTE_ENABLED'] == 'true'
+    assert environ['DAVI_ROUTE_ROUTE_MODE'] == 'pre'  # the variable wins
+    assert environ['DAVI_ROUTE_ROUTE_AGENT_TYPES'] == 'a,b'
+    assert 'DAVI_ROUTE_LOG_FILE' not in environ
+    assert not any('BAD' in name for name in environ)
+    assert launcher.feature_on('post')
+    path.write_text('{not json')
+    assert launcher.read_config(str(path)) == {}
+    home = {'CLAUDE_CONFIG_DIR': str(tmp_path / 'cfg')}
+    monkeypatch.setattr(launcher.os, 'environ', home)
+    assert launcher.config_path() == str(tmp_path / 'cfg' / 'davi-route.json')
+
+
+def test_setup_command_writes_merges_and_checks(tmp_path, monkeypatch):
+    configure = load_configure()
+    path = tmp_path / 'davi-route.json'
+    monkeypatch.setenv('DAVI_ROUTE_CONFIG', str(path))
+    monkeypatch.delenv('DAVI_ROUTE_ROUTE_MODE', raising=False)
+    checked = []
+
+    def check(url, key=None):
+        checked.append((url, key))
+        return True, 'ok'
+
+    def run(*argv):
+        out = io.StringIO()
+        code = configure.main(list(argv), check=check, out=out)
+        return code, out.getvalue()
+
+    code, text = run('"http://davi.test:20100/"')
+    assert code == 0 and 'Davi server http://davi.test:20100: ok' in text
+    assert json.loads(path.read_text()) == {
+        'davi_base_url': 'http://davi.test:20100',
+        'route_enabled': True,
+        'route_judge': 'davi',
+        'route_mode': 'tiers',
+    }
+    assert oct(path.stat().st_mode & 0o777) == '0o600'
+    code, _ = run(
+        '--mode',
+        'post',
+        '--set',
+        'log_file=/tmp/r.jsonl',
+        '--set',
+        'davi_api_key=secret-0000',
+        '--set',
+        'route_threshold=0.4',
+    )
+    saved = json.loads(path.read_text())
+    assert saved['route_mode'] == 'post' and saved['route_threshold'] == 0.4
+    assert saved['davi_base_url'] == 'http://davi.test:20100'
+    assert len(checked) == 1  # no URL given: no server check
+    code, text = run('--show')
+    assert 'secret-0000' not in text and '***' in text
+    assert checked[-1] == ('http://davi.test:20100', 'secret-0000')
+    code, _ = run('--off')
+    saved = json.loads(path.read_text())
+    assert saved['route_enabled'] is False
+    assert saved['stop_verify_enabled'] is False
+    code, text = run('davi.test:20100')
+    assert code == 2 and 'http://' in text
+    code, text = run('--set', 'no-equals')
+    assert code == 2
+
+
+def test_setup_command_checks_a_real_http_server():
+    import http.server
+    import threading
+
+    configure = load_configure()
+    replies = {
+        '/v1/systemone': (
+            200,
+            {'answers': {'route': {'probabilities': {'accept': 0.97}}}},
+        )
+    }
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 - http.server's naming
+            self.rfile.read(int(self.headers['Content-Length']))
+            code, body = replies.get(self.path, (404, {}))
+            self.send_response(code)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
+
+        def log_message(self, *_):
+            pass
+
+    server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f'http://127.0.0.1:{server.server_port}'
+        ok, message = configure.check_server(url, timeout=5)
+        assert ok and 'P(accept)=0.970' in message
+        ok, message = configure.check_server(url + '/nope', timeout=5)
+        assert not ok and 'HTTP 404' in message
+    finally:
+        server.shutdown()
+    ok, _ = configure.check_server('http://127.0.0.1:9', timeout=2)
+    assert not ok
+
+
+def test_setup_command_file_runs_the_script():
+    text = (PLUGIN / 'commands' / 'setup.md').read_text(encoding='utf-8')
+    assert 'allowed-tools: Bash(python3:*)' in text
+    script = '${CLAUDE_PLUGIN_ROOT}/hooks/configure.py'
+    assert f'!`python3 "{script}" $ARGUMENTS`' in text
+
+
 def test_marketplace_lists_the_plugin():
     path = ROOT / '.claude-plugin' / 'marketplace.json'
     market = json.loads(path.read_text(encoding='utf-8'))

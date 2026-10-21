@@ -84,7 +84,16 @@ davi-route verify --judge jev --task "What is 17*23?" --candidate "It is 390."
 ## Claude Code 개입 (A / E / B)
 
 플러그인은 `plugins/davi-route`에 있습니다. `datumo` marketplace에서 `davi-route@datumo`로 설치하거나(CLI, Claude
-앱 모두), 체크아웃에서 `--plugin-dir`로 불러옵니다. 설치 후 옵션 화면에서 켜야 동작합니다(전부 기본 꺼짐).
+앱 모두), 체크아웃에서 `--plugin-dir`로 불러옵니다. 전부 기본 꺼짐이고, 설치 후 아무 Claude Code 세션(CLI, 앱)에서
+아래 명령 한 번으로 켭니다. Davi 서버 주소를 저장하고 `tiers` 모드로 켠 뒤, 서버가 응답하는지 확인합니다.
+
+```
+/davi-route:setup http://<Davi 서버>:<포트>
+```
+
+claude.ai 플러그인 화면에는 옵션 입력 칸이 없어서, 이 명령이 옵션을 `~/.claude/davi-route.json`에 씁니다. hook이
+호출될 때마다 이 파일을 읽으므로 다음 서브에이전트 호출부터 적용됩니다. 같은 명령으로 바꾸거나 확인합니다
+(`--mode post`, `--judge claude`, `--set log_file=/tmp/route.jsonl`, `--off`, `--show`).
 
 설치본에는 `plugins/davi-route`만 복사되므로 플러그인이 스스로 필요한 것을 갖고 있습니다.
 
@@ -112,8 +121,9 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 1. Claude Code 안에서는 **다음 Agent 호출의 `model`**에 적용합니다 (PreToolUse `updatedInput`, 아래 probe 4로 확인).
 2. 하네스에서는 다음 `claude -p --model <next_model>`에 적용합니다.
 
-설정은 `DAVI_ROUTE_<KEY>` 환경변수가 userConfig(`CLAUDE_PLUGIN_OPTION_<KEY>`)보다 우선합니다. 하네스 arm은 이 방식으로
-설정을 넘깁니다.
+설정 우선순위는 `DAVI_ROUTE_<KEY>` 환경변수(Claude Code `settings.json`의 `env` 포함) → `~/.claude/davi-route.json`
+(`/davi-route:setup`이 씀, `DAVI_ROUTE_CONFIG`로 위치 변경) → userConfig(`CLAUDE_PLUGIN_OPTION_<KEY>`)입니다. 하네스 arm은
+환경변수로 설정을 넘깁니다.
 
 | 키 | 기본값 | 설명 |
 |---|---|---|

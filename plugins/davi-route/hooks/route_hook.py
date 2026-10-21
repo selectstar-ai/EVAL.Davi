@@ -13,6 +13,12 @@ form)::
   ``src`` take effect); the plugin's own copy in ``lib`` (what a
   marketplace install runs: it copies only ``plugins/davi-route``); the
   ``src`` of the marketplace's copy of the repository.
+- Options: ``DAVI_ROUTE_<KEY>`` environment variables (also from the
+  ``env`` of Claude Code settings), then the JSON file written by
+  ``/davi-route:setup`` (``~/.claude/davi-route.json``, or
+  ``DAVI_ROUTE_CONFIG``), then the plugin options
+  (``CLAUDE_PLUGIN_OPTION_<KEY>``). The file is read on every call and its
+  values are passed on as ``DAVI_ROUTE_<KEY>`` when that variable is unset.
 - Fast path: if the hook's feature is off (``route_enabled`` for pre/post,
   ``stop_verify_enabled`` for stop, either for setup) and probe mode is
   off, it exits 0 before reading stdin or importing anything.
@@ -26,10 +32,13 @@ form)::
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 
+CONFIG_FILE = 'davi-route.json'
+CONFIG_KEY = re.compile(r'^[a-z][a-z0-9_]*$')
 KINDS = ('pre', 'post', 'stop', 'subagent_stop', 'setup')
 REEXEC_GUARD = '_DAVI_ROUTE_HOOK_REEXEC'
 OPTION_PREFIXES = ('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_')
@@ -40,6 +49,43 @@ DEPENDENCY = 'httpx>=0.24,<1'
 DEPS_DIR = 'pydeps'
 SETUP_LOCK_SECONDS = 600
 PIP_TIMEOUT_SECONDS = 180
+
+
+def config_path():
+    configured = os.environ.get('DAVI_ROUTE_CONFIG', '').strip()
+    if configured:
+        return configured
+    home = os.environ.get('CLAUDE_CONFIG_DIR', '').strip()
+    home = home or os.path.join(os.path.expanduser('~'), '.claude')
+    return os.path.join(home, CONFIG_FILE)
+
+
+def _env_value(value):
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, (list, tuple)):
+        return ','.join(str(item) for item in value)
+    return str(value)
+
+
+def read_config(path):
+    """The option dict in ``path``; {} when missing, unreadable or invalid."""
+    try:
+        with open(path, encoding='utf-8') as file:
+            data = json.load(file)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_config_file():
+    """Pass the file's options on as unset ``DAVI_ROUTE_<KEY>`` variables."""
+    for key, value in read_config(config_path()).items():
+        if value is None or not CONFIG_KEY.match(str(key)):
+            continue
+        name = 'DAVI_ROUTE_' + key.upper()
+        if not os.environ.get(name, '').strip():
+            os.environ[name] = _env_value(value)
 
 
 def _opt(key):
@@ -283,6 +329,7 @@ def main(kind):
 
 if __name__ == '__main__':
     hook_kind = sys.argv[1] if len(sys.argv) > 1 else ''
+    load_config_file()
     if hook_kind not in KINDS or not feature_on(hook_kind):
         sys.exit(0)
     try:
