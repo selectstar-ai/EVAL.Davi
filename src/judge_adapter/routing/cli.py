@@ -14,6 +14,7 @@
   davi-route demo     --cache runs/x [--tasks demo.tasks.jsonl]
   davi-route hooklog  path/to/hooks.jsonl
   davi-route probe    --plugin-dir plugins/davi-route --out runs/probe
+  davi-route bundle   [--check]
 
 Every real step spends money (claude -p runs, judge calls). ``generate``
 asks for --yes unless --dry-run.
@@ -26,7 +27,7 @@ import json
 import os
 import sys
 
-from . import analysis, harness, probe
+from . import analysis, bundle, harness, probe
 from .questions import KINDS
 from .verifiers import JUDGES, build_verifier
 
@@ -353,6 +354,20 @@ def _add_demo(sub):
     parser.set_defaults(fn=cmd_demo)
 
 
+def cmd_bundle(args):
+    plugin_bundle = bundle.Bundle()
+    if args.check:
+        stale = plugin_bundle.stale()
+        for rel in stale:
+            print(f'stale: {rel}')
+        if stale:
+            print('run `davi-route bundle` to refresh plugins/davi-route/lib')
+        return 1 if stale else 0
+    written = plugin_bundle.write()
+    print(f'{len(written)} modules -> {plugin_bundle.lib}')
+    return 0
+
+
 def _add_hooklog(sub):
     parser = sub.add_parser('hooklog', help='summarize a davi-route hook log')
     parser.add_argument('path')
@@ -374,6 +389,19 @@ def _add_probe(sub):
     parser.set_defaults(fn=cmd_probe)
 
 
+def _add_bundle(sub):
+    parser = sub.add_parser(
+        'bundle',
+        help='copy the hook modules into plugins/davi-route/lib',
+    )
+    parser.add_argument(
+        '--check',
+        action='store_true',
+        help='only report a stale copy (exit 1)',
+    )
+    parser.set_defaults(fn=cmd_bundle)
+
+
 SUBCOMMANDS = (
     _add_generate,
     _add_judge,
@@ -384,6 +412,7 @@ SUBCOMMANDS = (
     _add_demo,
     _add_hooklog,
     _add_probe,
+    _add_bundle,
 )
 
 

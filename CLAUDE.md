@@ -8,6 +8,7 @@ Check before every commit:
 
 ```bash
 ruff check && ruff format --check      # config in pyproject.toml ([tool.ruff])
+PYTHONPATH=src davi-route bundle       # refresh plugins/davi-route/lib after src changes (generated, never edited)
 PYTHONPATH=src pytest -q
 ```
 
@@ -44,6 +45,9 @@ PYTHONPATH=src pytest -q
   judgment follows `on_error` (default: the cheap model, never a block). A hook never raises into Claude Code.
 - No task, answer or key text in logs; keys are read lazily and scrubbed from error details.
 - `plugins/davi-route/hooks/route_hook.py` uses the standard library only until it imports the hook module.
+- An installed plugin is self-contained: its code comes from `plugins/davi-route/lib`, and the SessionStart `setup`
+  installs only `httpx` (into `${CLAUDE_PLUGIN_DATA}/pydeps`), only when a feature is on and `auto_install_deps` is not
+  off.
 - `plugin.json` userConfig keys must exist on `Settings` with the same defaults (checked by a test).
 - Run `davi-route generate` without `ANTHROPIC_API_KEY` in the environment: `claude -p` would bill that key instead
   of the logged-in plan.

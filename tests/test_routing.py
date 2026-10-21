@@ -7,6 +7,7 @@ is replaced by a fake runner.
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import os
@@ -14,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from pathlib import Path
 
@@ -23,6 +25,7 @@ import pytest
 from judge_adapter.keys import CredentialMissing
 from judge_adapter.routing import (
     analysis,
+    bundle,
     cli,
     grading,
     harness,
@@ -1018,6 +1021,98 @@ def test_launcher_finds_src_in_the_marketplace_clone(tmp_path):
     assert probe_ran(run())
 
 
+def load_launcher():
+    spec = importlib.util.spec_from_file_location('route_hook_test', LAUNCHER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_plugin_bundle_is_current():
+    stale = bundle.Bundle().stale()
+    assert not stale, f'run `davi-route bundle` (stale: {stale})'
+
+
+def test_installed_copy_runs_on_its_bundle_alone(tmp_path):
+    # what a marketplace install leaves: plugins/davi-route only, no checkout
+    # above it, no marketplace clone. -S skips site (and the editable install
+    # of judge_adapter); httpx comes from the pydeps folder setup installs.
+    installed = tmp_path / 'cache' / 'datumo' / 'davi-route' / '0.5.1'
+    shutil.copytree(PLUGIN, installed)
+    data = tmp_path / 'data'
+    data.mkdir()
+    purelib = sysconfig.get_paths()['purelib']
+    (data / 'pydeps').symlink_to(purelib, target_is_directory=True)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_'))
+        and key != 'PYTHONPATH'
+    }
+    env.update(
+        {
+            'CLAUDE_PLUGIN_DATA': str(data),
+            'DAVI_ROUTE_ROUTE_ENABLED': 'true',
+            'DAVI_ROUTE_ROUTE_JUDGE': 'fake',
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            '-S',
+            str(installed / 'hooks' / 'route_hook.py'),
+            'post',
+        ],
+        input=json.dumps(agent_payload('PostToolUse')),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)['hookSpecificOutput']
+    assert 'opus' in output['additionalContext']
+
+
+def test_setup_installs_httpx_with_pip_target(tmp_path):
+    launcher = load_launcher()
+    deps = str(tmp_path / 'data' / 'pydeps')
+    calls = []
+
+    def refuse_then_install(command, **_):
+        calls.append(command)
+        code = 1 if len(calls) == 1 else 0
+        return subprocess.CompletedProcess(
+            command, code, '', 'error: externally-managed-environment'
+        )
+
+    status, detail = launcher.install_dependency(
+        deps, run=refuse_then_install, python='py'
+    )
+    assert status == 'installed' and deps in detail
+    assert calls[0][:4] == ['py', '-m', 'pip', 'install']
+    assert calls[0][calls[0].index('--target') + 1] == deps
+    assert '--break-system-packages' in calls[1]
+    assert not os.path.exists(deps + '.lock')
+    os.mkdir(deps + '.lock')
+    status, _ = launcher.install_dependency(deps, run=refuse_then_install)
+    assert status == 'install_busy' and len(calls) == 2
+
+
+def test_setup_runs_only_when_a_feature_is_on(monkeypatch):
+    launcher = load_launcher()
+    for key in list(os.environ):
+        if key.startswith(('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_')):
+            monkeypatch.delenv(key)
+    assert not launcher.feature_on('setup')
+    monkeypatch.setenv('CLAUDE_PLUGIN_OPTION_STOP_VERIFY_ENABLED', 'true')
+    assert launcher.feature_on('setup')
+    monkeypatch.setenv('CLAUDE_PLUGIN_OPTION_AUTO_INSTALL_DEPS', 'false')
+    assert not launcher.feature_on('setup')
+    monkeypatch.setenv('DAVI_ROUTE_PROBE', '1')
+    assert not launcher.feature_on('setup') and launcher.feature_on('post')
+
+
 def test_marketplace_lists_the_plugin():
     path = ROOT / '.claude-plugin' / 'marketplace.json'
     market = json.loads(path.read_text(encoding='utf-8'))
@@ -1032,7 +1127,13 @@ def test_plugin_manifest_matches_settings():
     plugin = json.loads(manifest.read_text(encoding='utf-8'))
     hooks_file = PLUGIN / 'hooks' / 'hooks.json'
     hooks = json.loads(hooks_file.read_text(encoding='utf-8'))['hooks']
-    assert set(hooks) == {'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop'}
+    assert set(hooks) == {
+        'SessionStart',
+        'PreToolUse',
+        'PostToolUse',
+        'Stop',
+        'SubagentStop',
+    }
     fields = set(Settings.__dataclass_fields__)
     # judge options read by verifiers.build_verifier, not by Settings
     secrets = {
@@ -1055,7 +1156,9 @@ def test_plugin_manifest_matches_settings():
         for entry in entries:
             (hook,) = entry['hooks']
             assert hook['args'][0] == LAUNCHER_ARG
-            assert hook['args'][1] in route_hooks.HOOK_KINDS
+            # setup (SessionStart) is handled by the launcher alone
+            kinds = (*route_hooks.HOOK_KINDS, 'setup')
+            assert hook['args'][1] in kinds
             assert hook['timeout'] > defaults.wall_budget_seconds
 
 

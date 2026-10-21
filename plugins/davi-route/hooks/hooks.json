@@ -1,5 +1,18 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/route_hook.py", "setup"],
+            "timeout": 240,
+            "statusMessage": "davi-route: checking httpx (installs once if missing)"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "^(Agent|Task)$",

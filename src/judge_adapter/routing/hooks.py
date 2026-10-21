@@ -87,6 +87,9 @@ class Settings:
     on_error: str = 'accept'
     wall_budget_seconds: float = 25.0
     log_file: str = ''
+    # read by the launcher (route_hook.py setup): pip-install httpx into
+    # ${CLAUDE_PLUGIN_DATA}/pydeps at session start when it is missing
+    auto_install_deps: bool = True
     probe: bool = False
     probe_nonce: str = 'X'
     probe_pre_model: str = ''
@@ -140,6 +143,7 @@ class Settings:
                 env, 'wall_budget_seconds', 25.0, low=1.0, high=120.0
             ),
             log_file=opt(env, 'log_file', ''),
+            auto_install_deps=opt_flag(env, 'auto_install_deps', True),
             probe=opt_flag(env, 'probe', False),
             probe_nonce=opt(env, 'probe_nonce', 'X'),
             probe_pre_model=opt(env, 'probe_pre_model', ''),

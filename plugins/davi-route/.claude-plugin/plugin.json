@@ -1,6 +1,6 @@
 {
   "name": "davi-route",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "EXPERIMENTAL routing hooks for measuring a verifier inside Claude Code. Pick route_mode: post (cheap subagent first, a verifier checks its result and asks for a strong re-run when needed), pre (a verifier reads the task before the subagent runs and sends it to the cheap or the strong model directly) both (route up front, then verify what went to the cheap model) or tiers (rate difficulty, pick the cheap, mid or strong model). B: at Stop, a verifier checks completion and can block the stop once. All off by default and fail-open. Install as davi-route@datumo, or load with --plugin-dir from an EVAL.Davi checkout.",
   "author": {
     "name": "hundredeuk2",
@@ -27,6 +27,7 @@
     "stop_verify_enabled": {"type": "boolean", "title": "B: completion check at Stop", "description": "Verify completion when the agent stops; block once below the threshold.", "default": false},
     "stop_threshold": {"type": "number", "title": "Block stop below P(complete)", "description": "Pre-fixed experimental value, not calibrated.", "default": 0.5, "min": 0, "max": 1},
     "stop_max_blocks": {"type": "number", "title": "Max blocked stops per request", "description": "Loop guard (0-5).", "default": 1, "min": 0, "max": 5},
+    "auto_install_deps": {"type": "boolean", "title": "Install httpx if missing", "description": "At session start, when routing or the stop check is on and python3 cannot import httpx, pip-install it into the plugin's data folder (needs network). Off: install httpx yourself.", "default": true},
     "log_file": {"type": "string", "title": "Log file (JSONL)", "description": "One line per hook call: probabilities, decisions, models, latency, estimated judge cost. No text.", "default": ""},
     "davi_base_url": {"type": "string", "title": "Davi server URL (davi judge)", "description": "http://host:port of a Davi server (POST /v1/systemone). When set, the davi judge calls it instead of the RunPod endpoint. Overrides the DAVI_BASE_URL environment variable.", "default": ""},
     "davi_api_key": {"type": "string", "title": "Davi server key (davi judge, optional)", "description": "Bearer key, only if your Davi server requires one.", "sensitive": true},
