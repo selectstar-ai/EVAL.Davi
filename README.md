@@ -119,6 +119,7 @@ Settings come from `DAVI_ROUTE_<KEY>` environment variables, which take preceden
 | `route_enabled` | `false` | Turn subagent routing on |
 | `route_mode` | `post` | `tiers` (3 models by difficulty), `post`, `pre`, `both` |
 | `route_judge` | `davi` | `davi`, `jev`, `claude`, `fake` |
+| `davi_base_url` / `davi_api_key` | (unset) | Davi server (`POST /v1/systemone`) and its optional key. Set them in the plugin options in the Claude app; they override the `DAVI_BASE_URL` / `DAVI_API_KEY` environment variables |
 | `route_cheap_model` / `route_mid_model` / `route_strong_model` | `haiku` / `sonnet` / `opus` | Model strings |
 | `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | Difficulty cut-offs (KLEAR-fitted) |
 | `route_tier_check` | `false` | `tiers`: also judge answers that went to the cheap model |

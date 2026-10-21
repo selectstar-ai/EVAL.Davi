@@ -28,6 +28,8 @@
     "stop_threshold": {"type": "number", "title": "Block stop below P(complete)", "description": "Pre-fixed experimental value, not calibrated.", "default": 0.5, "min": 0, "max": 1},
     "stop_max_blocks": {"type": "number", "title": "Max blocked stops per request", "description": "Loop guard (0-5).", "default": 1, "min": 0, "max": 5},
     "log_file": {"type": "string", "title": "Log file (JSONL)", "description": "One line per hook call: probabilities, decisions, models, latency, estimated judge cost. No text.", "default": ""},
+    "davi_base_url": {"type": "string", "title": "Davi server URL (davi judge)", "description": "http://host:port of a Davi server (POST /v1/systemone). When set, the davi judge calls it instead of the RunPod endpoint. Overrides the DAVI_BASE_URL environment variable.", "default": ""},
+    "davi_api_key": {"type": "string", "title": "Davi server key (davi judge, optional)", "description": "Bearer key, only if your Davi server requires one.", "sensitive": true},
     "runpod_api_key": {"type": "string", "title": "RunPod API key (davi judge)", "description": "Key for your choice endpoint.", "sensitive": true},
     "choice_endpoint_id": {"type": "string", "title": "Choice endpoint ID (davi judge)", "description": "RunPod serverless endpoint ID.", "sensitive": true},
     "usd_per_second": {"type": "number", "title": "Endpoint price USD/s (davi judge)", "description": "Required for the davi judge.", "min": 0},

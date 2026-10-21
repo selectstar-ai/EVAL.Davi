@@ -116,6 +116,7 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 | `route_tier_low` / `route_tier_high` | 0.48 / 0.78 | (`tiers`) 난이도가 low 미만이면 cheap, high 이상이면 strong, 그 사이는 mid. KLEAR로 정한 값 |
 | `route_tier_check` | false | (`tiers`) cheap 모델로 간 답도 판정해 `route_threshold` 미만이면 strong으로 재실행 |
 | `route_judge` | davi | davi / jev / claude / fake |
+| `davi_base_url` / `davi_api_key` | (없음) | Davi 서버 주소(`POST /v1/systemone`)와 선택 키. Claude 앱에서는 플러그인 옵션 화면에서 입력하고, 넣으면 `DAVI_BASE_URL` / `DAVI_API_KEY` 환경변수보다 우선합니다 |
 | `route_threshold` | 0.5 | (`post`/`both`) 답의 P(accept)가 이 값보다 작으면 escalate |
 | `route_pre_threshold` | 0.5 | (`pre`/`both`) 과제만 본 P(저비용 모델 성공)가 이 값보다 작으면 strong 모델로 바로 보냄 |
 | `route_cheap_model` / `route_strong_model` | haiku / opus | 모델 문자열 |
