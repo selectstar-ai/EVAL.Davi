@@ -1239,11 +1239,16 @@ def test_setup_command_checks_a_real_http_server():
     assert not ok
 
 
-def test_setup_command_file_runs_the_script():
-    text = (PLUGIN / 'commands' / 'setup.md').read_text(encoding='utf-8')
-    assert 'allowed-tools: Bash(python3:*)' in text
-    script = '${CLAUDE_PLUGIN_ROOT}/hooks/configure.py'
-    assert f'!`python3 "{script}" $ARGUMENTS`' in text
+def test_setup_skill_runs_the_script_without_shell_preexecution():
+    # a skill (not commands/ with a `!` line): claude.ai-synced copies do not
+    # run `!` lines, and the Chat "+" menu lists skills
+    assert not (PLUGIN / 'commands').exists()
+    text = (PLUGIN / 'skills' / 'setup' / 'SKILL.md').read_text('utf-8')
+    front, _, body = text.partition('\n---\n')
+    assert 'name: setup' in front
+    assert 'allowed-tools: Bash(python3:*)' in front
+    assert 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/configure.py"' in body
+    assert '!`' not in text
 
 
 def test_marketplace_lists_the_plugin():
