@@ -332,6 +332,27 @@ def test_davi_systemone_needs_no_key_and_has_unknown_cost():
     assert str(seen[-1].url) == 'http://davi.test:20100/v1/systemone'
 
 
+def test_davi_server_from_the_plugin_options():
+    # the Claude app passes userConfig as CLAUDE_PLUGIN_OPTION_<KEY>
+    seen = []
+    transport = systemone_handler(seen)
+    env = {
+        'CLAUDE_PLUGIN_OPTION_DAVI_BASE_URL': 'http://option.test:1',
+        'CLAUDE_PLUGIN_OPTION_DAVI_API_KEY': 'davi-key-0000000000',
+        'DAVI_BASE_URL': 'http://shell.test:2',
+    }
+    verdict = verifiers.build_verifier(
+        'davi', env, transport=transport
+    ).verify('q', 'a')
+    assert verdict.outcome == 'ok'
+    assert str(seen[0].url) == 'http://option.test:1/v1/systemone'
+    assert seen[0].headers['authorization'] == 'Bearer davi-key-0000000000'
+    # an empty option (the manifest default) falls back to DAVI_BASE_URL
+    env['CLAUDE_PLUGIN_OPTION_DAVI_BASE_URL'] = ''
+    verifiers.build_verifier('davi', env, transport=transport).verify('q', 'a')
+    assert str(seen[-1].url) == 'http://shell.test:2/v1/systemone'
+
+
 def test_davi_pre_ensemble_asks_every_phrasing_and_averages_logits():
     seen = []
 
@@ -1013,17 +1034,19 @@ def test_plugin_manifest_matches_settings():
     hooks = json.loads(hooks_file.read_text(encoding='utf-8'))['hooks']
     assert set(hooks) == {'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop'}
     fields = set(Settings.__dataclass_fields__)
+    # judge options read by verifiers.build_verifier, not by Settings
     secrets = {
+        'davi_api_key',
         'runpod_api_key',
         'choice_endpoint_id',
-        'usd_per_second',
         'typesafe_api_key',
         'anthropic_api_key',
     }
+    judge_options = {'davi_base_url', 'usd_per_second'}
     config = plugin['userConfig']
-    assert set(config) <= fields | secrets
-    sensitive = secrets - {'usd_per_second'}
-    assert all(config[key]['sensitive'] for key in sensitive)
+    assert set(config) <= fields | secrets | judge_options
+    assert all(config[key]['sensitive'] for key in secrets)
+    assert not any(config[key].get('sensitive') for key in judge_options)
     defaults = Settings()
     for key, spec in config.items():
         if key in fields and 'default' in spec:
