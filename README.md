@@ -1,16 +1,26 @@
-# davi-route
+# Davi as a router for Claude Code subagents
 
-**Send each subagent task to the cheapest Claude model that can solve it.** Before a Claude Code subagent runs, a
-judge rates how hard the task is and the plugin picks **haiku**, **sonnet** or **opus** for that one call. Easy work
-stays cheap; hard work gets the strong model.
+Coding agents usually run every task on one model. A small model is cheap but misses hard tasks; a strong model
+solves more of them but spends its price on easy work too. Routing each task to the right model would get the best
+of both, but only if the router itself is cheap, fast, and stable.
 
-[Routing docs (Korean)](docs/routing.md) · [Legacy filter plugin](docs/plugin.md) · [Reference](docs/reference.md) ·
+This project tests a decision model as that router. `davi-route` is a Claude Code plugin: before a subagent runs,
+Davi rates how hard the task is, and the plugin picks **haiku**, **sonnet** or **opus** for that one call. We compare
+Davi with two other judges, TypeSafe Jev and Claude Haiku 5.5, and with single-model baselines on the same tasks,
+measuring accuracy, cost, and consistency.
+
+[한국어 README](docs/README.ko.md) · [Routing experiment log (Korean)](docs/routing.md) ·
+[Reference](docs/reference.md) ·
 [GitHub](https://github.com/selectstar-ai/EVAL.Davi)
 
 > Experimental. Every hook is off by default and fail-open: a hook error or a slow judge leaves the call unchanged,
 > and a failed judgment falls back to the cheap model (`on_error`). A hook never blocks Claude Code on its own error.
 
-## How it works
+## What does davi-route do?
+
+A hook cannot switch the main session's model, so routing happens where Claude Code accepts a model per call: the
+`model` field of each `Agent` tool call. The plugin rewrites it in a PreToolUse hook (`updatedInput`), which we
+verified in a real Claude Code run.
 
 ```
 main agent ── Agent tool call (prompt, model?) ──▶ PreToolUse hook (davi-route)
@@ -29,21 +39,52 @@ judge failed ──▶ cheap model (on_error=accept) or strong (on_error=escalat
 judge too slow (wall_budget_seconds) ──▶ the call is left as it was
 ```
 
-- **A hook cannot switch the main session's model**, so routing is applied where Claude Code accepts a model per
-  call: the `model` field of each `Agent` tool call (PreToolUse `updatedInput`, verified in a real Claude Code run).
-- The judge reads **only the task**, before any answer exists, so routing costs one judge call and no extra model
-  run. With Davi (`/v1/systemone`) the five levels come back as probabilities in one call, typically under a second.
-- Other modes are kept for comparison (`route_mode`): `post` (haiku first, the judge reads its answer, opus re-runs
-  when needed), `pre` (two models, routed up front) and `both`. A Stop hook can also check completion
-  (`stop_verify_enabled`).
+The judge returns probabilities over five difficulty levels. Their expected value, scaled to `0`–`1`, is compared
+with two cut-offs:
+
+| Expected level | Model | Typical task |
+| --- | --- | --- |
+| below `0.48` | haiku | A small model should answer it from memory |
+| `0.48` to `0.78` | sonnet | Needs more knowledge or reasoning |
+| `0.78` and above | opus | Hard for anything but the strong model |
+
+## Why judge the task instead of the answer?
+
+The obvious router runs the cheap model first, checks its answer, and escalates when the answer looks wrong. That
+costs a cheap run on every task and a second run on every escalation, and the check happens after the latency is
+already spent.
+
+`davi-route` judges **only the task**, before any answer exists. Routing then costs one judge call and no extra
+model run. With Davi (`/v1/systemone`) the five levels come back as probabilities in one call, typically in under a
+second.
+
+A judge that sees only the task can still be consistently wrong, so we measure routing by what matters: whether the
+routed model answered correctly, and what it cost.
+
+## Experiment
+
+We used K-HLE, an in-house set of 174 hard Korean closed-book QA items, and ran each item with haiku 5.5,
+sonnet 5.5 and opus 5.5 headless (`claude -p`). We repeated the whole run five times, giving 870 runs per policy,
+and graded every answer against its reference.
+
+Each judge rated the difficulty of every task, and the 3-tier policy above turned its rating into a model choice:
+
+| Judge | How it rates difficulty |
+| --- | --- |
+| Davi | Choice probabilities over the five levels, one `/v1/systemone` call |
+| TypeSafe Jev | Choice probabilities over the five levels, one `/v1/systemone` call |
+| Claude Haiku 5.5 | A verbalized level (no logprobs), Anthropic Messages API |
+
+We compare the routed policies with three baselines that send every task to one model.
 
 ## Results
 
-K-HLE(In-house) (174 hard Korean QA items), each item run with haiku 5.5, sonnet 5.5 and opus 5.5 headless (`claude -p`), five
-rounds, 870 runs per policy. Correct answers and model-run cost over the five rounds:
+### Accuracy and cost
+
+Correct answers and model-run cost over the five rounds:
 
 | Policy | Correct (of 870) | Accuracy | Model-run cost |
-|---|---|---|---|
+| --- | ---: | ---: | ---: |
 | haiku only | 451 | 51.8% | $0.96 |
 | sonnet only | 574 | 66.0% | $9.15 |
 | 3-tier, Claude Haiku 5.5 as judge | 587 | 67.5% | $10.18 |
@@ -51,28 +92,64 @@ rounds, 870 runs per policy. Correct answers and model-run cost over the five ro
 | **3-tier, Davi as judge** | **619** | **71.1%** | **$10.78** |
 | opus only | 612 | 70.3% | $14.99 |
 
-- **Against opus only:** 7 more correct answers (+0.8 points) at **28% lower cost** ($4.21 less). Davi's 3-tier
-  policy matched or beat opus in 3 of 5 rounds and cost less in every round (70–75% of opus).
-- **Against the other judges:** Davi's routing was ahead of Claude's and Jev's in every round. In a fair split
-  (cut-offs chosen on half of the items, measured on the other half, 80% of the opus budget) accuracy was Davi
-  69.9%, Jev 66.9%, Claude 63.4%.
-- **Consistency:** across the five rounds, Davi changed its tier for 2 items, Jev for 14 and Claude for 40.
-- **Inside Claude Code:** 43 candidate items were run four times through the real plugin (`Agent` tool,
-  `route_mode=tiers`, Davi). 24 items got the same model and a correct answer in all four runs.
+Against opus only, Davi's routing got 7 more answers right (+0.8 points) at **28% lower cost** ($4.21 less). It
+matched or beat opus in 3 of 5 rounds and cost less in every round (70–75% of opus).
 
-Caveats, stated plainly:
+The default cut-offs were fitted on this same data, so these numbers are optimistic. For a fairer comparison we chose
+the cut-offs on half of the items, under a budget of 80% of opus only, and measured on the other half:
 
-- The default cut-offs (0.48 / 0.78) were fitted on this same data, so the headline numbers are optimistic; the
-  split-half figures above are the fairer comparison. Recalibrate for your own workload.
-- Costs are Claude Code `total_cost_usd` list-price estimates of the model runs, not bills. **Judge calls are not
-  included** (Davi's price is not set; Jev's $0.042/MTok is an assumption).
-- One dataset, one language, one task type (closed-book QA). Coding or long agentic tasks were not measured.
-- The 24 demo items were selected on outcomes; they illustrate the behaviour and are not a performance estimate.
+| Judge | Held-out accuracy |
+| --- | ---: |
+| Davi | 69.9% |
+| TypeSafe Jev | 66.9% |
+| Claude Haiku 5.5 | 63.4% |
 
-## Install
+Davi's routing was ahead of Jev's and Claude's in every round.
 
-Python 3.9+ (`python3` on the PATH). Install the plugin from the `datumo` marketplace (this repository), in the CLI or in the
-Claude app's plugin settings:
+### Consistency
+
+A router should send the same task to the same model every time. Across the five rounds, Davi changed its tier for
+**2** of 174 items, Jev for 14, and Claude for 40.
+
+| Judge | Items whose tier changed across rounds |
+| --- | ---: |
+| Davi | 2 |
+| TypeSafe Jev | 14 |
+| Claude Haiku 5.5 | 40 |
+
+### Inside Claude Code
+
+The numbers above come from offline replay. To check the plugin end to end, we ran 43 candidate items four times
+through the real plugin (`Agent` tool, `route_mode=tiers`, Davi as judge). 24 items got the same model and a correct
+answer in all four runs. These 24 were selected on outcomes; they show the mechanism working, not a performance
+estimate.
+
+### Limits
+
+- **One dataset.** One language, one task type (closed-book QA). Coding or long agentic tasks were not measured.
+- **Fitted cut-offs.** The defaults (`0.48` / `0.78`) come from K-HLE, which is hard by design. Recalibrate for your
+  own workload; the split-half figures are the fairer comparison.
+- **Costs are estimates.** They are Claude Code `total_cost_usd` list-price estimates of the model runs, not bills.
+  **Judge calls are not included**: Davi's price is not set, and Jev's $0.042/MTok is an assumption.
+
+## What cheap routing changes
+
+Most subagent calls in a session do not need the strongest model, and a router that costs one sub-second call per
+task makes it practical to stop paying for it everywhere. The saving is only worth having if accuracy holds, which
+is why the cut-offs, the judge, and the fail-open defaults are all things you should check against your own tasks
+before relying on them.
+
+## Run the plugin
+
+Requirements:
+
+- **Python 3.10+** (`python3` on the PATH)
+- **Claude Code** with PreToolUse `updatedInput` support for the `Agent` tool. Tested with Claude Code 2.1.299 and
+  2.1.300; check yours with `claude --version`.
+- A judge: a Davi server, or a TypeSafe API key for Jev ([Use Jev as the judge](#use-jev-as-the-judge))
+
+Install the plugin from the `datumo` marketplace (this repository), in the CLI or in the Claude app's plugin
+settings:
 
 ```bash
 claude plugin marketplace add selectstar-ai/EVAL.Davi
@@ -83,41 +160,64 @@ Then, in Claude Code (the terminal or the desktop app's **Code tab**), point it 
 routing on (`tiers` mode) and checks that the server answers:
 
 ```
-/davi-route:setup http://<your-davi-host>:<port>
-```
-
-`setup` is a skill, so asking in words also works ("use the Davi server at http://host:port for davi-route"); approve
-the `python3 .../configure.py` run when asked. The plugin works only where hooks run: Claude Code and Cowork. In a
-regular claude.ai chat, hooks and subagents do not run, so nothing is routed there.
-
-Everything is off until then. The claude.ai plugin page has no fields for plugin options, so the skill writes them to
-`~/.claude/davi-route.json` instead. The hooks read that file on every call, so it applies from the next subagent call.
-Change or inspect options the same way (`--mode post`, `--judge claude`, `--set log_file=/tmp/route.jsonl`,
-`--off`, `--show`). Option precedence: `DAVI_ROUTE_<KEY>` environment variables (also from the `env` block of Claude
-Code's `settings.json`), then `~/.claude/davi-route.json`, then the plugin options (`claude plugin configure`).
-
-The installed copy is self-contained: the routing code ships in `plugins/davi-route/lib` (generated by
-`davi-route bundle`), and at session start the plugin pip-installs `httpx` into `${CLAUDE_PLUGIN_DATA}/pydeps` if
-`python3` cannot import it (needs network once; option `auto_install_deps`, default on). For development, load it from
-a checkout instead (the checkout's `src` then wins over `lib`):
-
-```bash
-git clone https://github.com/selectstar-ai/EVAL.Davi && cd EVAL.Davi
-pip install -e ".[test,lint]"
-claude --plugin-dir plugins/davi-route
-```
-
-The hook runs `python3`. If it cannot import `httpx` and `auto_install_deps` is off (or the install failed: no network,
-no pip), the hook tries `${CLAUDE_PLUGIN_DATA}/venv` and otherwise logs `dependency_missing` and changes nothing.
-After changing anything under `src/judge_adapter`, run `davi-route bundle` (a test fails on a stale `lib`).
-
-## Quickstart
-
-```
 /davi-route:setup http://<your-davi-host>:<port> --set log_file=/tmp/route.jsonl
 ```
 
-Without the command, the same options work as environment variables (shell or `settings.json` `env`):
+`setup` is a skill, so asking in words also works ("use the Davi server at http://host:port for davi-route");
+approve the `python3 .../configure.py` run when asked. Inspect or turn off routing the same way (`--show`, `--off`).
+
+Then ask for work that uses subagents ("Use the Agent tool to ..."). Each `Agent` call gets a model, and each hook
+call writes one JSON line (level, tier, model, latency; never the task text):
+
+```bash
+davi-route hooklog /tmp/route.jsonl
+```
+
+The plugin works only where hooks run: Claude Code and Cowork. In a regular claude.ai chat, hooks and subagents do
+not run, so nothing is routed there.
+
+### Use Jev as the judge
+
+Davi is our own model. If you do not have a Davi server, the same 3-tier routing runs with TypeSafe Jev, which
+answers the same five-level question through `https://api.typesafe.ai/v1/systemone`. In our experiment Jev's routing
+was second to Davi's (69.4% vs 71.1%) at a lower model-run cost.
+
+1. Get an API key from [TypeSafe](https://docs.typesafe.ai/introduction) and export it before you start Claude Code,
+   so the key never goes through the chat:
+
+   ```bash
+   export JEV_API_KEY=<your-typesafe-key>     # TYPESAFE_API_KEY also works
+   claude
+   ```
+
+2. Turn routing on with Jev. Without a Davi URL, `setup` does not switch routing on by itself, so set it explicitly:
+
+   ```
+   /davi-route:setup --judge jev --mode tiers --set route_enabled=true --set log_file=/tmp/route.jsonl
+   ```
+
+   Or, without the skill:
+
+   ```bash
+   export DAVI_ROUTE_ROUTE_ENABLED=true
+   export DAVI_ROUTE_ROUTE_MODE=tiers
+   export DAVI_ROUTE_ROUTE_JUDGE=jev
+   ```
+
+3. Check the judge directly:
+
+   ```bash
+   davi-route verify --judge jev --kind tier --task "What is 17*23?" --candidate ""
+   ```
+
+The default cut-offs (`0.48` / `0.78`) were fitted for Davi. Jev's levels fall differently, so recalibrate them for
+Jev with [Measure your own workload](#measure-your-own-workload) and set `route_tier_low` / `route_tier_high`.
+
+### Without the setup skill
+
+The claude.ai plugin page has no fields for plugin options, so the skill writes them to `~/.claude/davi-route.json`
+instead; the hooks read that file on every call. The same options also work as environment variables (shell or
+`settings.json` `env`):
 
 ```bash
 export DAVI_ROUTE_DAVI_BASE_URL=http://<your-davi-host>:<port>   # POST /v1/systemone
@@ -127,95 +227,136 @@ export DAVI_ROUTE_LOG_FILE=$PWD/route.jsonl
 claude --plugin-dir plugins/davi-route
 ```
 
-Then ask for work that uses subagents ("Use the Agent tool to ..."). Each `Agent` call gets a model, and each hook
-call writes one JSON line (level, tier, model, latency; never the task text):
+Option precedence: `DAVI_ROUTE_<KEY>` environment variables, then `~/.claude/davi-route.json` (`DAVI_ROUTE_CONFIG`
+moves it), then the plugin options (`claude plugin configure`, read as `CLAUDE_PLUGIN_OPTION_<KEY>`).
+
+### Dependencies
+
+The installed copy is self-contained: the routing code ships in `plugins/davi-route/lib` (generated by
+`davi-route bundle`), and at session start the plugin pip-installs `httpx` into `${CLAUDE_PLUGIN_DATA}/pydeps` if
+`python3` cannot import it (needs network once; option `auto_install_deps`, default on). If that fails, the hook
+tries `${CLAUDE_PLUGIN_DATA}/venv` and otherwise logs `dependency_missing` and changes nothing.
+
+For development, load the plugin from a checkout instead (the checkout's `src` then wins over `lib`):
 
 ```bash
-davi-route hooklog route.jsonl
+git clone https://github.com/selectstar-ai/EVAL.Davi && cd EVAL.Davi
+pip install -e ".[test,lint]"
+claude --plugin-dir plugins/davi-route
 ```
 
-Settings come from `DAVI_ROUTE_<KEY>` environment variables, then `~/.claude/davi-route.json` (written by
-`/davi-route:setup`; `DAVI_ROUTE_CONFIG` moves it), then the plugin's userConfig (`CLAUDE_PLUGIN_OPTION_<KEY>`).
+After changing anything under `src/judge_adapter`, run `davi-route bundle` (a test fails on a stale `lib`).
 
-## Settings
+### Configuration
 
-| Key | Default | Meaning |
-|---|---|---|
+| Key | Default | Purpose |
+| --- | --- | --- |
 | `route_enabled` | `false` | Turn subagent routing on |
-| `route_mode` | `post` | `tiers` (3 models by difficulty), `post`, `pre`, `both` |
+| `route_mode` | `post` | Use `tiers` (3 models by difficulty); `setup` with a Davi URL sets it. Other modes: [Planned features](#planned-features) |
 | `route_judge` | `davi` | `davi`, `jev`, `claude`, `fake` |
-| `davi_base_url` / `davi_api_key` | (unset) | Davi server (`POST /v1/systemone`) and its optional key. Set them in the plugin options in the Claude app; they override the `DAVI_BASE_URL` / `DAVI_API_KEY` environment variables |
+| `davi_base_url` / `davi_api_key` | (unset) | Davi server (`POST /v1/systemone`) and its optional key; override the `DAVI_BASE_URL` / `DAVI_API_KEY` environment variables |
+| `typesafe_api_key` | (unset) | Jev key; `JEV_API_KEY` or `TYPESAFE_API_KEY` in the environment also works |
 | `route_cheap_model` / `route_mid_model` / `route_strong_model` | `haiku` / `sonnet` / `opus` | Model strings |
-| `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | Difficulty cut-offs (K-HLE-fitted) |
-| `route_tier_check` | `false` | `tiers`: also judge answers that went to the cheap model |
-| `route_threshold` / `route_pre_threshold` | `0.5` / `0.5` | `post` / `pre` thresholds on P(accept) |
-| `route_pin_cheap` | `always` | `post`: when to set the cheap model on an `Agent` call |
+| `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | Difficulty cut-offs (fitted on K-HLE with Davi) |
 | `route_agent_types` | (all) | Comma-separated `subagent_type` filter |
-| `stop_verify_enabled` | `false` | Completion check at Stop (blocks at most `stop_max_blocks` times) |
 | `on_error` | `accept` | On a judge failure: `accept` (cheap model, fail-open) or `escalate` |
 | `wall_budget_seconds` | `25` | Time limit per hook call; past it nothing changes |
 | `log_file` | (none) | JSONL log of every hook call |
 
 Every option, its effect and the judge prompts: [docs/routing.md](docs/routing.md).
 
-## Judges
+### Judges
 
 | Judge | Endpoint | Probability | Cost estimate |
-|---|---|---|---|
-| `davi` | `DAVI_BASE_URL` + `/v1/systemone` (optional key `DAVI_API_KEY`); else a RunPod choice endpoint | Choice probabilities (5 levels for `tier`) | Unknown until `davi_usd_in_per_mtok` is set |
-| `jev` | `https://api.typesafe.ai/v1/systemone`, key `JEV_API_KEY` or `TYPESAFE_API_KEY` | Choice probabilities | Usage × $0.042/MTok (assumed) |
+| --- | --- | --- | --- |
+| `davi` | `DAVI_BASE_URL` + `/v1/systemone` (optional key `DAVI_API_KEY`); else a RunPod choice endpoint | Choice probabilities over 5 levels | Unknown until `davi_usd_in_per_mtok` is set |
+| `jev` | `https://api.typesafe.ai/v1/systemone`, key `JEV_API_KEY` or `TYPESAFE_API_KEY` | Choice probabilities over 5 levels | Usage × $0.042/MTok (assumed) |
 | `claude` | Anthropic Messages, key `ANTHROPIC_API_KEY`, default `claude-haiku-5-5`, effort low | A verbalized number (no logprobs) | Usage × list price |
 | `fake` | In process; `[[ACCEPT=p]]` in the text sets P | Fixed | 0 |
 
-```bash
-davi-route verify --judge davi --kind tier --task "What is 17*23?" --candidate ""
-```
+## Measure your own workload
 
-## Measuring your own workload
-
-The `davi-route` CLI runs tasks headless, judges them and replays routing policies offline:
+The `davi-route` CLI reproduces the experiment on any task set: it runs tasks headless, judges them, and replays
+routing policies offline.
 
 ```bash
 # 1) run every task once per model (spends money: needs --yes; --dry-run prints the commands)
 davi-route generate --tasks tasks.jsonl --cache runs/x \
     --arm cheap=haiku --arm mid=sonnet --arm strong=opus --yes
-# 2) judge the tasks (tier) or the cheap answers (answer)
+# 2) rate each task's difficulty with one or more judges
 davi-route judge --tasks tasks.jsonl --cache runs/x --source-arm cheap \
-    --judge davi --judge claude --kind tier
+    --judge davi --judge jev --kind tier
 # 3) curves, baselines and a frozen threshold on a held-out split
 davi-route analyze --cache runs/x --cheap cheap --strong strong
 ```
 
+Run `generate` without `ANTHROPIC_API_KEY` in the environment: `claude -p` would bill that key instead of the
+logged-in plan.
+
 A task line has `id`, `prompt` and either `answer` + `grader` (`contains`, `exact`, `regex`, `number`, `llm`) or a
-`check_cmd`. Other commands: `regrade`, `curate`, `demo`, `hooklog`, `probe`. Details: [docs/routing.md](docs/routing.md).
+`check_cmd`; see [examples/routing/](examples/routing/). Other commands: `regrade`, `curate`, `demo`, `hooklog`,
+`probe`. Details: [docs/routing.md](docs/routing.md).
 
-## Code layout
+## Project layout
 
-`src/judge_adapter/routing/`, PEP 8 (79 columns) and the conventions in [CLAUDE.md](CLAUDE.md):
-
-| Module | Contents |
-|---|---|
-| `config.py` | Options and secrets from the environment (`DAVI_ROUTE_*` over `CLAUDE_PLUGIN_OPTION_*`) |
-| `questions.py` | Judge questions per kind (`answer`, `completion`, `pre`, `tier`) and the Davi phrasing ensemble |
-| `verifiers.py` | `Verifier` (abstract) → `FakeVerifier`, `DaviRunPodVerifier`, `HttpVerifier` → `SystemOneVerifier` (`DaviVerifier`, `JevVerifier`), `ClaudeVerifier` |
-| `policy.py` | `RoutePolicy` (accept / escalate) and `TierPolicy` (cheap / mid / strong) |
-| `hooks.py` | `Settings`, `State`, `RouteHook` (abstract) → `AgentPreHook`, `AgentPostHook`, `StopHook`, and `main` |
-| `grading.py` | `Grader` (abstract) → exact, contains, regex, number, command, LLM graders |
-| `harness.py` | Tasks, arms, `RunCache`, `claude -p` runs, judging, regrading |
-| `analysis.py` | `ReplayRow`, baselines, sweeps, frozen thresholds, demo tables |
-| `cli.py`, `probe.py` | The `davi-route` command and the hook mechanism probes |
+- `plugins/davi-route/` — The Claude Code plugin: hooks, setup skill, bundled `lib`
+- `src/judge_adapter/routing/` — Routing code (PEP 8, 79 columns, conventions in [CLAUDE.md](CLAUDE.md))
+  - `config.py` — Options and secrets from the environment (`DAVI_ROUTE_*` over `CLAUDE_PLUGIN_OPTION_*`)
+  - `questions.py` — Judge questions per kind (`answer`, `completion`, `pre`, `tier`) and the Davi phrasing ensemble
+  - `verifiers.py` — `Verifier` (abstract) → `FakeVerifier`, `DaviRunPodVerifier`, `HttpVerifier` →
+    `SystemOneVerifier` (`DaviVerifier`, `JevVerifier`), `ClaudeVerifier`
+  - `policy.py` — `RoutePolicy` (accept / escalate) and `TierPolicy` (cheap / mid / strong)
+  - `hooks.py` — `Settings`, `State`, `RouteHook` (abstract) → `AgentPreHook`, `AgentPostHook`, `StopHook`, and `main`
+  - `grading.py` — `Grader` (abstract) → exact, contains, regex, number, command, LLM graders
+  - `harness.py` — Tasks, arms, `RunCache`, `claude -p` runs, judging, regrading
+  - `analysis.py` — `ReplayRow`, baselines, sweeps, frozen thresholds, demo tables
+  - `cli.py`, `probe.py` — The `davi-route` command and the hook mechanism probes
+- `examples/routing/` — Example task and arm files
+- `docs/` — Routing details (Korean), legacy plugin and reference docs
+- `tests/test_routing.py` — Routing tests
 
 ```bash
 ruff check && ruff format --check
-pytest tests/test_routing.py
+PYTHONPATH=src pytest -q
 ```
+
+## References
+
+- [Claude Code hooks](https://code.claude.com/docs/en/hooks)
+- [Claude Code plugins](https://code.claude.com/docs/en/plugins)
+- [TypeSafe introduction (Jev)](https://docs.typesafe.ai/introduction)
+
+## Planned features
+
+The features below are in the code but not part of the 3-tier routing measured above. They are experimental, have
+no published results yet, and may change.
+
+- **Answer-checking modes** (`route_mode`):
+  - `post` (the current default value): haiku runs first, the judge reads its answer, and opus re-runs when the
+    answer is likely wrong.
+  - `pre`: two models, routed up front by a yes/no judgment on the task.
+  - `both`: `pre` and `post` together.
+- **Tier answer check** (`route_tier_check`): in `tiers` mode, also judge answers that went to the cheap model.
+- **Completion check at Stop** (`stop_verify_enabled`): before the session ends, the judge checks whether the work is
+  done, and blocks the stop at most `stop_max_blocks` times.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `route_tier_check` | `false` | `tiers`: also judge answers that went to the cheap model |
+| `route_threshold` / `route_pre_threshold` | `0.5` / `0.5` | `post` / `pre` thresholds on P(accept) |
+| `route_pin_cheap` | `always` | `post`: when to set the cheap model on an `Agent` call |
+| `stop_verify_enabled` | `false` | Completion check at Stop (blocks at most `stop_max_blocks` times) |
+
+Turn one on with `setup`, for example `/davi-route:setup --mode post` or `--set stop_verify_enabled=true`. To measure
+the answer-checking modes offline, judge the cheap answers with `davi-route judge ... --kind answer`.
 
 ## Legacy: the `davi` search-result filter
 
 This repository started as `judge-adapter`: a pairwise LLM-judge adapter and a Claude Code plugin (`davi`) that
 filters Tavily search results with a choice model before the agent reads them. It is unchanged and still installs
 as before (`claude plugin install davi@datumo`). See [docs/plugin.md](docs/plugin.md),
-[docs/reference.md](docs/reference.md) and [docs/verification.md](docs/verification.md).
+[docs/reference.md](docs/reference.md), [docs/verification.md](docs/verification.md) and the Korean summary
+[docs/ko.md](docs/ko.md).
 
 ## License
 

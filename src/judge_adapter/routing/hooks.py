@@ -72,7 +72,7 @@ class Settings:
     route_cheap_model: str = 'haiku'
     route_strong_model: str = 'opus'
     route_mid_model: str = 'sonnet'
-    # KLEAR-fitted (haiku / sonnet / opus 5.5); recalibrate per workload
+    # K-HLE-fitted (haiku / sonnet / opus 5.5); recalibrate per workload
     route_tier_low: float = 0.48
     route_tier_high: float = 0.78
     route_tier_check: bool = False

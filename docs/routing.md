@@ -26,7 +26,7 @@
   `<judge>:pre`(예: `davi:pre`)로 저장됩니다. 사전 라우팅에서 강한 모델로 보낸 과제는 저비용 실행 비용을 내지
   않으므로 `analyze`/`demo`의 비용도 판정 + 강한 모델만으로 계산합니다.
 
-  `pre` 문구는 "작고 빠른 모델이 도구 없이 기억만으로 답하면 맞을까?"입니다. KLEAR 174문항(haiku 5.5 정답 여부)에서
+  `pre` 문구는 "작고 빠른 모델이 도구 없이 기억만으로 답하면 맞을까?"입니다. K-HLE 174문항(haiku 5.5 정답 여부)에서
   처음 문구("저비용 모델이 잘 풀까?", Davi AUROC 0.661)보다 이 형태가 haiku가 맞힐 문항과 틀릴 문항을 더 잘
   갈랐습니다. `DAVI_BASE_URL`의 Davi는 같은 질문을 여덟 가지로 바꿔 한 번의 호출로 묻고 logit 평균을 P로 씁니다
   (`PRE_ENSEMBLE`, 가중치 학습 없음, `davi_pre_ensemble=false`로 끔). 결과(2026-10-15, 1회 실행):
@@ -47,7 +47,7 @@
   두 선택지만 받으므로 `tier`를 지원하지 않습니다(판정 실패로 처리). 하네스 결과는 `<judge>:tier`로 저장되며,
   두 모델용 `analyze`/`demo`에서는 빠집니다.
 
-  KLEAR 174문항, haiku 5.5 / sonnet 5.5 / opus 5.5 각 1회(2026-10-15). sonnet만 쓰면 63.2%, 비용은 opus만의 60%.
+  K-HLE 174문항, haiku 5.5 / sonnet 5.5 / opus 5.5 각 1회(2026-10-15). sonnet만 쓰면 63.2%, 비용은 opus만의 60%.
 
   | 3단 배정 (예산은 opus만 대비) | 70% | 80% |
   |---|---|---|
@@ -135,7 +135,7 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 | `route_enabled` | false | A + E 켜기/끄기 |
 | `route_mode` | post | `post`: cheap 먼저, 답을 판정해 필요하면 strong으로 재실행 / `pre`: 실행 전 과제만 판정해 cheap 또는 strong으로 바로 보냄(재실행 없음, 답을 보지 못함) / `both`: `pre`로 보낸 뒤 cheap으로 간 것만 답을 다시 판정 / `tiers`: 실행 전 난이도로 cheap / mid / strong 중 하나로 보냄 |
 | `route_mid_model` | sonnet | (`tiers`) 중간 난이도에 쓸 모델 |
-| `route_tier_low` / `route_tier_high` | 0.48 / 0.78 | (`tiers`) 난이도가 low 미만이면 cheap, high 이상이면 strong, 그 사이는 mid. KLEAR로 정한 값 |
+| `route_tier_low` / `route_tier_high` | 0.48 / 0.78 | (`tiers`) 난이도가 low 미만이면 cheap, high 이상이면 strong, 그 사이는 mid. K-HLE로 정한 값 |
 | `route_tier_check` | false | (`tiers`) cheap 모델로 간 답도 판정해 `route_threshold` 미만이면 strong으로 재실행 |
 | `route_judge` | davi | davi / jev / claude / fake |
 | `davi_base_url` / `davi_api_key` | (없음) | Davi 서버 주소(`POST /v1/systemone`)와 선택 키. Claude 앱에서는 플러그인 옵션 화면에서 입력하고, 넣으면 `DAVI_BASE_URL` / `DAVI_API_KEY` 환경변수보다 우선합니다 |
