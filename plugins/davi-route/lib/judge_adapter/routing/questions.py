@@ -67,7 +67,7 @@ KINDS = {
     },
     # "Will a small model answering from memory get it right?" separated
     # haiku-right from haiku-wrong tasks better than asking about the task's
-    # difficulty directly (KLEAR, 2026-10-15; docs/routing.md).
+    # difficulty directly (K-HLE, 2026-10-15; docs/routing.md).
     'pre': {
         'instructions': (
             'A small, fast AI model will answer the task in the field "task" '
@@ -87,7 +87,7 @@ KINDS = {
             'the stronger model directly.'
         ),
     },
-    # The wording of the KLEAR experiment that set the default cut-offs.
+    # The wording of the K-HLE experiment that set the default cut-offs.
     'tier': {
         'instructions': (
             'Rate how hard the task in "task" is for a small, fast AI model '
