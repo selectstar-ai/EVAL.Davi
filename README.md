@@ -39,7 +39,7 @@ judge too slow (wall_budget_seconds) ──▶ the call is left as it was
 
 ## Results
 
-KLEAR (174 hard Korean QA items), each item run with haiku 5.5, sonnet 5.5 and opus 5.5 headless (`claude -p`), five
+K-HLE(In-house) (174 hard Korean QA items), each item run with haiku 5.5, sonnet 5.5 and opus 5.5 headless (`claude -p`), five
 rounds, 870 runs per policy. Correct answers and model-run cost over the five rounds:
 
 | Policy | Correct (of 870) | Accuracy | Model-run cost |
@@ -146,7 +146,7 @@ Settings come from `DAVI_ROUTE_<KEY>` environment variables, then `~/.claude/dav
 | `route_judge` | `davi` | `davi`, `jev`, `claude`, `fake` |
 | `davi_base_url` / `davi_api_key` | (unset) | Davi server (`POST /v1/systemone`) and its optional key. Set them in the plugin options in the Claude app; they override the `DAVI_BASE_URL` / `DAVI_API_KEY` environment variables |
 | `route_cheap_model` / `route_mid_model` / `route_strong_model` | `haiku` / `sonnet` / `opus` | Model strings |
-| `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | Difficulty cut-offs (KLEAR-fitted) |
+| `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | Difficulty cut-offs (K-HLE-fitted) |
 | `route_tier_check` | `false` | `tiers`: also judge answers that went to the cheap model |
 | `route_threshold` / `route_pre_threshold` | `0.5` / `0.5` | `post` / `pre` thresholds on P(accept) |
 | `route_pin_cheap` | `always` | `post`: when to set the cheap model on an `Agent` call |
