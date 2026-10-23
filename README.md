@@ -63,9 +63,9 @@ routed model answered correctly, and what it cost.
 
 ## Experiment
 
-We used K-HLE, 174 hard Korean closed-book QA items, and ran each item with haiku 5.5, sonnet 5.5 and opus 5.5
-headless (`claude -p`). We repeated the whole run five times, giving 870 runs per policy, and graded every answer
-against its reference.
+We used K-HLE, an in-house set of 174 hard Korean closed-book QA items, and ran each item with haiku 5.5,
+sonnet 5.5 and opus 5.5 headless (`claude -p`). We repeated the whole run five times, giving 870 runs per policy,
+and graded every answer against its reference.
 
 Each judge rated the difficulty of every task, and the 3-tier policy above turned its rating into a model choice:
 

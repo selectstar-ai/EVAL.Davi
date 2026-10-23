@@ -59,7 +59,7 @@ judge too slow (wall_budget_seconds) ──▶ the call is left as it was
 
 ## 실험
 
-어려운 한국어 closed-book QA 174문항인 K-HLE를 썼고, 문항마다 haiku 5.5, sonnet 5.5, opus 5.5를 headless
+사내 데이터셋 K-HLE(어려운 한국어 closed-book QA 174문항)를 썼고, 문항마다 haiku 5.5, sonnet 5.5, opus 5.5를 headless
 (`claude -p`)로 돌렸습니다. 전체를 다섯 번 반복해 정책마다 870회 실행했고, 모든 답을 참고답으로 채점했습니다.
 
 판정자마다 모든 작업의 난이도를 매기고, 위의 3단 정책이 그 값을 모델 선택으로 바꿨습니다.
