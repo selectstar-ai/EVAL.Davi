@@ -311,9 +311,13 @@ A task line has `id`, `prompt` and either `answer` + `grader` (`contains`, `exac
   - `harness.py` — Tasks, arms, `RunCache`, `claude -p` runs, judging, regrading
   - `analysis.py` — `ReplayRow`, baselines, sweeps, frozen thresholds, demo tables
   - `cli.py`, `probe.py` — The `davi-route` command and the hook mechanism probes
+- `src/judge_adapter/decision/` — Decision core: `ChoiceQuestion` / `NoulQuestion` and the `/v1/systemone`
+  clients (`DaviClient`, `JevClient`) with strict reading and five error codes
+- `src/judge_adapter/reading/` — `davi-read`: blocks, fetching limits, two-pass judging, choosing, the command
+- `skills/davi-read/` — Agent skill for `davi-read`
 - `examples/routing/` — Example task and arm files
 - `docs/` — Routing details (Korean), legacy plugin and reference docs
-- `tests/test_routing.py` — Routing tests
+- `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py` — Tests
 
 ```bash
 ruff check && ruff format --check
@@ -349,6 +353,36 @@ no published results yet, and may change.
 
 Turn one on with `setup`, for example `/davi-route:setup --mode post` or `--set stop_verify_enabled=true`. To measure
 the answer-checking modes offline, judge the cheap answers with `davi-route judge ... --kind answer`.
+
+## Experimental: read a page with `davi-read`
+
+`davi-read` prints the parts of a web page (or a local HTML, Markdown or text file) that answer a question, copied
+verbatim with their heading path. An agent can call it instead of WebFetch, which returns a paraphrase. It is a new
+feature with no measured results yet: it is not shown to improve answers, only to return the source text.
+
+```bash
+pip install -e .            # provides the davi-read command
+davi-read https://docs.python.org/3/library/functools.html "What happens if lru_cache maxsize is None?"
+davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
+```
+
+- **How:** the page is split into blocks (paragraphs, list items, code, table rows). The judge rates every block in
+  windows of about 9,000 characters (one request per window, one `noul` question per block), rates the likely ones
+  again alone with their neighbouring text, and keeps those at or above the keep threshold, their close neighbours
+  under the same heading, the first block, and the header rows of kept table rows. Pages up to 6,000 characters are
+  returned whole.
+- **Judge:** Davi by default, read from the same options as the routing hooks (`DAVI_BASE_URL`, `/davi-route:setup`).
+  Because Davi runs on your own server, internal pages stay in house. `--judge jev` uses TypeSafe Jev instead and
+  sends the page text to its API.
+- **Fail-open:** if the judge fails, the page is printed unjudged (status `judge_failed`).
+- **Limits:** hosts that resolve to private addresses are refused unless allowed (`--allow-host`, or the
+  `read_allow_hosts` option for an intranet); pages over 5 MB, PDFs and images are refused; pages built with
+  JavaScript are not rendered. The thresholds (0.6 / 0.8 / 0.6) are starting values, not fitted to any judge.
+- **Agent setup:** copy [skills/davi-read/SKILL.md](skills/davi-read/SKILL.md) into `.claude/skills/davi-read/`.
+
+On the Python `functools` page (2026-10-27, Davi, one run each), it kept 6 of 143 blocks (1,327 of 32,464
+characters) in English and 7 of 143 (1,410 of 27,358) in Korean, both including the sentence that answers the
+question, in about 6 seconds.
 
 ## Legacy: the `davi` search-result filter
 

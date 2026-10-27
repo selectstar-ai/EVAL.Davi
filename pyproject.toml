@@ -46,6 +46,7 @@ lint = ["ruff>=0.15"]
 judge-adapter = "judge_adapter.cli:main"
 judge-adapter-fastchat = "judge_adapter.fastchat_runner:main"
 davi-route = "judge_adapter.routing.cli:main"
+davi-read = "judge_adapter.reading.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/selectstar-ai/EVAL.Davi"
@@ -64,6 +65,7 @@ include = [
     "/examples",
     "/hooks",
     "/plugins",
+    "/skills",
     "/commands",
     "/bin",
     "/.claude-plugin",
@@ -84,8 +86,12 @@ line-length = 79
 target-version = "py39"
 include = [
     "src/judge_adapter/routing/*.py",
+    "src/judge_adapter/decision/*.py",
+    "src/judge_adapter/reading/*.py",
     "plugins/davi-route/hooks/*.py",
     "tests/test_routing.py",
+    "tests/test_decision.py",
+    "tests/test_reading.py",
 ]
 
 [tool.ruff.lint]

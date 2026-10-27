@@ -305,9 +305,13 @@ davi-route analyze --cache runs/x --cheap cheap --strong strong
   - `harness.py` — 작업, arm, `RunCache`, `claude -p` 실행, 판정, 재채점
   - `analysis.py` — `ReplayRow`, 기준선, 스윕, 고정 임계값, 시연 표
   - `cli.py`, `probe.py` — `davi-route` 명령과 hook 메커니즘 확인
+- `src/judge_adapter/decision/` — 공통 판정 모듈: `ChoiceQuestion` / `NoulQuestion`과 `/v1/systemone` client
+  (`DaviClient`, `JevClient`), 엄격한 응답 검증과 다섯 가지 오류 코드
+- `src/judge_adapter/reading/` — `davi-read`: 블록 나누기, 페이지 받기 제한, 2단계 판정, 고르기, 명령
+- `skills/davi-read/` — `davi-read` 에이전트 skill
 - `examples/routing/` — 예시 작업·arm 파일
 - `docs/` — 라우팅 실험 기록(한국어), 레거시 플러그인과 레퍼런스 문서
-- `tests/test_routing.py` — 라우팅 테스트
+- `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py` — 테스트
 
 ```bash
 ruff check && ruff format --check
@@ -343,6 +347,34 @@ PYTHONPATH=src pytest -q
 
 `setup`으로 켭니다. 예: `/davi-route:setup --mode post` 또는 `--set stop_verify_enabled=true`. 답 검사 모드를
 오프라인으로 측정하려면 `davi-route judge ... --kind answer`로 저비용 모델의 답을 판정하세요.
+
+## 실험 기능: `davi-read`로 페이지 읽기
+
+`davi-read`는 웹 페이지(또는 로컬 HTML·Markdown·텍스트 파일)에서 질문에 답하는 부분만 제목 경로와 함께 원문 그대로
+출력합니다. 에이전트가 요약된 글을 돌려주는 WebFetch 대신 부를 수 있습니다. 아직 측정 결과가 없는 새 기능입니다. 답이 더
+정확해진다는 근거는 없고, 원문을 그대로 돌려준다는 점만 보장합니다.
+
+```bash
+pip install -e .            # davi-read 명령 설치
+davi-read https://docs.python.org/ko/3/library/functools.html "lru_cache의 maxsize를 None으로 하면 어떻게 되나요?"
+davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
+```
+
+- **동작:** 페이지를 블록(문단, 목록 항목, 코드, 표 행)으로 나눕니다. 약 9,000자 단위 창마다 요청 하나로 블록별
+  `noul` 질문을 보내 점수를 매기고, 가능성 있는 블록은 앞뒤 글과 함께 하나씩 다시 묻습니다. 남기는 것은 남김 경계값
+  이상인 블록, 같은 제목 아래 가까운 이웃, 첫 블록, 남긴 표 행의 머리글 행입니다. 6,000자 이하 페이지는 그대로 돌려줍니다.
+- **판정자:** 기본은 Davi이며, 라우팅 훅과 같은 설정(`DAVI_BASE_URL`, `/davi-route:setup`)을 읽습니다. Davi는 자체
+  서버에서 돌기 때문에 내부 문서가 밖으로 나가지 않습니다. `--judge jev`를 쓰면 TypeSafe Jev로 판정하고 페이지 글이
+  그 API로 전송됩니다.
+- **실패해도 원문 전달:** 판정이 실패하면 판정 없이 페이지를 출력합니다(상태 `judge_failed`).
+- **제한:** 사설 주소로 연결되는 호스트는 허용하지 않으면 거부합니다(`--allow-host`, 사내 위키는 `read_allow_hosts`
+  옵션). 5 MB 넘는 페이지, PDF, 이미지는 거부합니다. JavaScript로 내용을 그리는 페이지는 지원하지 않습니다. 경계값
+  (0.6 / 0.8 / 0.6)은 출발값이며 어느 판정자에도 맞춰 정하지 않았습니다.
+- **에이전트 설정:** [skills/davi-read/SKILL.md](../skills/davi-read/SKILL.md)를 `.claude/skills/davi-read/`에
+  복사합니다.
+
+Python `functools` 문서(2026-10-27, Davi, 각 1회)에서 영어는 143블록 중 6개(32,464자 중 1,327자), 한국어는
+143블록 중 7개(27,358자 중 1,410자)를 남겼고, 둘 다 질문에 답하는 문장을 포함했습니다. 약 6초 걸렸습니다.
 
 ## 레거시: `davi` 검색 결과 필터
 
