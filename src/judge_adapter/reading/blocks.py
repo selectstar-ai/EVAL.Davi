@@ -22,10 +22,16 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin
 
 MAX_BLOCK_CHARS = 4000
-MIN_MAIN_CHARS = 200
+# Longer preformatted text (RFCs, plain-text pages) is split at blank
+# lines, so each paragraph is its own block.
+MAX_CODE_CHARS = 1500
+# Main content is used alone only when it holds enough of the page's text.
+MIN_MAIN_CHARS = 500
+MIN_MAIN_SHARE = 0.1
 
 _SPACE_RE = re.compile(r'\s+')
 _SENTENCE_END_RE = re.compile(r'(?<=[.!?。])\s+')
+_BLANK_LINE_RE = re.compile(r'\n[ \t\f\r]*\n')
 _MD_HEADING_RE = re.compile(r'^(#{1,6})\s+(.*?)\s*#*\s*$')
 _MD_ITEM_RE = re.compile(r'^\s*(?:[-*+]|\d+[.)])\s+(.*)$')
 _MD_TABLE_RULE_RE = re.compile(r'^\s*\|?\s*:?-{2,}')
@@ -43,13 +49,55 @@ SKIP_TAGS = frozenset(
         'button',
         'select',
         'iframe',
-        'aside',
         'head',
     }
 )
-SKIP_ROLES = frozenset({'navigation', 'banner', 'contentinfo', 'search'})
+SKIP_ROLES = frozenset(
+    {'navigation', 'banner', 'contentinfo', 'search', 'menu', 'menubar'}
+)
 ANCHOR_MARKS = frozenset({'¶', '#', '§', '🔗'})
+# An <aside> is page chrome (a sidebar) unless it is a documentation note.
+NOTE_WORDS = (
+    'note',
+    'tip',
+    'warning',
+    'caution',
+    'important',
+    'admonition',
+    'callout',
+    'danger',
+    'info',
+    'hint',
+)
+LEAD_IN_MAX_CHARS = 1500
+# Short paragraphs and list items under one heading are merged: a fragment
+# rarely says on its own what it is about.
+FRAGMENT_CHARS = 100
+FRAGMENT_MAX_CHARS = 800
+_LINK_TARGET_RE = re.compile(r'\[([^\]]+)\]\([^)]*\)')
+# Page chrome marked by class: edit links, navigation boxes, skip links.
+SKIP_CLASSES = frozenset(
+    {
+        'mw-editsection',
+        'navbox',
+        'vertical-navbox',
+        'mw-jump-link',
+        'reflist',
+        'references',
+        'toc',
+        'sidebar',
+        'sortkey',
+        'headerlink',
+        'hash-link',
+        'anchor-link',
+    }
+)
+# Menus and dropdowns (for example a wiki's language list) by class part.
+SKIP_CLASS_PARTS = ('dropdown', 'portlet', 'interlanguage')
+SKIP_IDS = frozenset({'toc'})
 MAIN_TAGS = frozenset({'main', 'article'})
+MAIN_IDS = frozenset({'content', 'main-content'})
+_HIDDEN_STYLE_RE = re.compile(r'display\s*:\s*none', re.IGNORECASE)
 HEADINGS = {f'h{level}': level for level in range(1, 7)}
 FLUSH_TAGS = frozenset(
     {
@@ -112,7 +160,17 @@ def collapse(text):
 
 
 def _pieces(text, kind):
-    """Split an over-long block at line ends (code) or sentence ends."""
+    """Split an over-long block: code at blank lines, then line ends; other
+    text at sentence ends."""
+    if kind == 'code' and len(text) > MAX_CODE_CHARS:
+        paragraphs = [part.strip('\n') for part in _BLANK_LINE_RE.split(text)]
+        if len(paragraphs) > 1:
+            return [
+                piece
+                for part in paragraphs
+                if part.strip()
+                for piece in _pieces(part, kind)
+            ]
     if len(text) <= MAX_BLOCK_CHARS:
         return [text]
     units = (
@@ -138,11 +196,86 @@ def _pieces(text, kind):
     return pieces
 
 
+def _is_note(classes, attributes):
+    """An <aside> that holds a note, tip or warning of the page itself."""
+    words = (
+        ' '.join(sorted(classes)).lower()
+        + ' '
+        + (attributes.get('role') or '').lower()
+    )
+    return any(word in words for word in NOTE_WORDS)
+
+
+def merge_lead_ins(blocks):
+    """Join a sentence ending in ':' with the list items right after it
+    under the same heading (up to ``LEAD_IN_MAX_CHARS``), so a condition it
+    states stays with the items."""
+    merged = []
+    for block in blocks:
+        last = merged[-1] if merged else None
+        if (
+            last is not None
+            and block.kind == 'item'
+            and last.path == block.path
+            and last.kind in ('text', 'lead')
+            and (last.kind == 'lead' or last.text.rstrip().endswith(':'))
+            and len(last.text) + len(block.text) < LEAD_IN_MAX_CHARS
+        ):
+            merged[-1] = replace(
+                last, text=f'{last.text}\n{block.text}', kind='lead'
+            )
+        else:
+            merged.append(block)
+    return [
+        replace(block, kind='text') if block.kind == 'lead' else block
+        for block in merged
+    ]
+
+
+def _plain_length(text):
+    """Length without link targets, so a list of short links still merges."""
+    return len(_LINK_TARGET_RE.sub(r'\1', text))
+
+
+def merge_fragments(blocks):
+    """Join runs of short paragraphs or list items under the same heading,
+    up to ``FRAGMENT_MAX_CHARS``. Table rows and code are never joined."""
+    merged = []
+    for block in blocks:
+        last = merged[-1] if merged else None
+        if (
+            last is not None
+            and block.kind in ('text', 'item')
+            and _plain_length(block.text) < FRAGMENT_CHARS
+            and last.path == block.path
+            and (
+                last.kind == 'fragments'
+                or (
+                    last.kind in ('text', 'item')
+                    and _plain_length(last.text) < FRAGMENT_CHARS
+                )
+            )
+            and _plain_length(last.text) + _plain_length(block.text)
+            < FRAGMENT_MAX_CHARS
+        ):
+            merged[-1] = replace(
+                last, text=f'{last.text}\n{block.text}', kind='fragments'
+            )
+        else:
+            merged.append(block)
+    return [
+        replace(block, kind='text') if block.kind == 'fragments' else block
+        for block in merged
+    ]
+
+
 class BlockParser(ABC):
     """Text in, numbered blocks out."""
 
     def parse(self, text, base_url=''):
-        raw = self._raw_blocks(text or '', base_url)
+        raw = merge_fragments(
+            merge_lead_ins(self._raw_blocks(text or '', base_url))
+        )
         blocks = []
         for block in raw:
             for piece in _pieces(block.text, block.kind):
@@ -232,14 +365,28 @@ class _HtmlCollector(HTMLParser):
     # --- HTMLParser hooks --------------------------------------------------
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
+        classes = set((attributes.get('class') or '').split())
         skipping = (
             tag in SKIP_TAGS
+            or bool(classes & SKIP_CLASSES)
+            or any(
+                part in name for name in classes for part in SKIP_CLASS_PARTS
+            )
+            or (tag == 'sup' and 'reference' in classes)
+            or (tag == 'aside' and not _is_note(classes, attributes))
             or attributes.get('role') in SKIP_ROLES
             or attributes.get('aria-hidden') == 'true'
             or 'hidden' in attributes
+            or attributes.get('id') in SKIP_IDS
+            or bool(_HIDDEN_STYLE_RE.search(attributes.get('style') or ''))
             or (tag == 'header' and not self._main)
         )
-        main = tag in MAIN_TAGS or attributes.get('role') == 'main'
+        main = (
+            tag in MAIN_TAGS
+            or attributes.get('role') == 'main'
+            or attributes.get('id') in MAIN_IDS
+            or (tag == 'div' and 'body' in classes)
+        )
         if tag not in VOID_TAGS:
             self._stack.append((tag, skipping, main))
             self._skip += skipping
@@ -376,7 +523,9 @@ class HtmlBlockParser(BlockParser):
         collector.close()
         blocks = collector.blocks
         main = [block for block in blocks if block.main]
-        if sum(len(block.text) for block in main) >= MIN_MAIN_CHARS:
+        main_chars = sum(len(block.text) for block in main)
+        total = sum(len(block.text) for block in blocks)
+        if main_chars >= max(MIN_MAIN_CHARS, MIN_MAIN_SHARE * total):
             return main
         return blocks
 

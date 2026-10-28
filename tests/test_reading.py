@@ -22,12 +22,18 @@ from judge_adapter.reading import (
     TextBlockParser,
     Thresholds,
     format_result,
+    tokens,
 )
 from judge_adapter.reading import cli as read_cli
 from judge_adapter.reading.blocks import MAX_BLOCK_CHARS, Block
 from judge_adapter.reading.reader import choose
 
 MARKER = 'maxsize'
+# Pushes a paragraph past the length below which short fragments are merged.
+PAD = (
+    ' This sentence makes the paragraph long enough to stand on its own,'
+    ' past the limit below which fragments are merged.'
+)
 FILLER = 'This sentence is about something else entirely. ' * 4
 
 
@@ -79,13 +85,13 @@ class Judge:
 
 def long_page():
     sections = []
-    for index in range(30):
+    for index in range(80):
         sections.append(f'<h2>Part {index}</h2><p>{FILLER}</p>')
     sections.insert(
         12,
-        '<h2>lru_cache</h2><p>Wraps a function.</p>'
+        f'<h2>lru_cache</h2><p>Wraps a function.{PAD}</p>'
         f'<p>If {MARKER} is None the cache grows without bound.</p>'
-        '<p>Typed caching is separate.</p>',
+        f'<p>Typed caching is separate.{PAD}</p>',
     )
     table = (
         '<table><thead><tr><th>Option</th><th>Default</th></tr></thead>'
@@ -118,8 +124,7 @@ def test_html_blocks_keep_headings_tables_code_and_links():
     assert rows == [
         ('text', ('Top',), 'See [the page](https://docs.test/x).', False),
         ('text', ('Top', 'f(maxsize)'), 'About f.', False),
-        ('item', ('Top', 'Sub'), '- one', False),
-        ('item', ('Top', 'Sub'), '- two', False),
+        ('text', ('Top', 'Sub'), '- one\n- two', False),
         ('row', ('Top', 'Sub'), 'A | B', True),
         ('row', ('Top', 'Sub'), '1 | 2', False),
         ('code', ('Top', 'Sub'), 'x = 1\n  y = 2', False),
@@ -135,6 +140,100 @@ def test_page_title_is_the_path_when_there_is_no_heading():
     assert blocks[0].path == ('Only title',)
 
 
+def test_long_preformatted_text_is_split_into_paragraphs():
+    paragraph = '   JSON text exchanged between systems MUST be\n   UTF-8.'
+    pre = '\n\n'.join([paragraph] + ['   filler line ' * 20] * 10)
+    blocks = HtmlBlockParser().parse(f'<pre>{pre}</pre>')
+    assert len(blocks) == 11
+    assert blocks[0].text == paragraph
+    assert all(b.kind == 'code' for b in blocks)
+    short = HtmlBlockParser().parse('<pre>a = 1\n\nb = 2</pre>')
+    assert [b.text for b in short] == ['a = 1\n\nb = 2']
+
+
+def test_wiki_citation_marks_and_edit_links_are_dropped():
+    html = (
+        '<h2>History<span class="mw-editsection">[edit]</span></h2>'
+        '<p>The Allies formed the United Nations,<sup class="reference">'
+        '<a href="#cite-1">[1]</a></sup> which came into existence.</p>'
+        '<div class="navbox"><ul><li>Related</li></ul></div>'
+    )
+    blocks = HtmlBlockParser().parse(html)
+    assert [(b.path, b.text) for b in blocks] == [
+        (
+            ('History',),
+            'The Allies formed the United Nations, which came into existence.',
+        )
+    ]
+
+
+def test_note_asides_are_kept_and_sidebars_dropped():
+    html = (
+        f'<main><h1>Doc</h1><p>Body text.{PAD}</p>'
+        '<aside class="admonition warning"><p>Do not use in production.</p>'
+        '</aside><aside class="sidebar"><p>Related links</p></aside></main>'
+    )
+    texts = [b.text for b in HtmlBlockParser().parse(html)]
+    assert texts == [f'Body text.{PAD}', 'Do not use in production.']
+
+
+def test_a_lead_in_sentence_is_joined_with_its_list():
+    html = (
+        '<h1>Limits</h1><p>The value must be one of:</p>'
+        f'<ul><li>small</li><li>large</li></ul><p>Afterwards.{PAD}</p>'
+        '<ul><li>separate</li></ul>'
+    )
+    texts = [b.text for b in HtmlBlockParser().parse(html)]
+    assert texts == [
+        'The value must be one of:\n- small\n- large',
+        f'Afterwards.{PAD}',
+        '- separate',
+    ]
+
+
+def test_short_fragments_under_one_heading_are_merged():
+    long_item = 'x' * 120
+    html = (
+        '<h1>Steps</h1><ul><li>one</li><li>two</li><li>three</li></ul>'
+        f'<ul><li>{long_item}</li><li>after the long one</li></ul>'
+        '<h2>Other</h2><p>short</p>'
+        '<table><tr><td>a</td></tr><tr><td>b</td></tr></table>'
+        '<pre>x = 1</pre><pre>y = 2</pre>'
+    )
+    texts = [b.text for b in HtmlBlockParser().parse(html)]
+    assert texts == [
+        '- one\n- two\n- three',
+        f'- {long_item}',
+        '- after the long one',
+        'short',
+        'a',
+        'b',
+        'x = 1',
+        'y = 2',
+    ]
+
+
+def test_fragment_merging_stops_at_the_length_cap():
+    items = ''.join(f'<li>{"y" * 90} {i}</li>' for i in range(12))
+    blocks = HtmlBlockParser().parse(f'<h1>Many</h1><ul>{items}</ul>')
+    assert len(blocks) > 1
+    assert all(len(b.text) < 900 for b in blocks)
+
+
+def test_menus_inside_main_content_are_dropped():
+    html = (
+        '<main id="content"><header><h1>Python</h1>'
+        '<div class="vector-dropdown mw-portlet-lang"><ul>'
+        '<li><a href="https://af.test/">Afrikaans</a></li></ul></div>'
+        '<ul role="menu"><li>Edit</li></ul></header>'
+        '<p>Python is a programming language.</p></main>'
+    )
+    blocks = HtmlBlockParser().parse(html)
+    assert [(b.path, b.text) for b in blocks] == [
+        (('Python',), 'Python is a programming language.')
+    ]
+
+
 def test_markdown_blocks():
     text = (
         '# Title\n\nIntro\nline two.\n\n## Sub\n- a\n1. b\n\n'
@@ -143,8 +242,7 @@ def test_markdown_blocks():
     blocks = TextBlockParser().parse(text)
     assert [(b.kind, b.text, b.head) for b in blocks] == [
         ('text', 'Intro line two.', False),
-        ('item', '- a', False),
-        ('item', '- b', False),
+        ('text', '- a\n- b', False),
         ('row', 'h | v', True),
         ('row', 'x | y', False),
         ('code', 'code', False),
@@ -220,6 +318,53 @@ def test_fetch_decodes_a_legacy_charset_and_follows_redirects():
     )
     assert page.final_url == 'https://docs.test/b'
     assert '한국어 문서' in page.text
+
+
+def test_refused_files_are_saved_for_a_file_reader(tmp_path):
+    routes = {
+        'https://docs.test/a.pdf': (
+            200,
+            {'content-type': 'application/pdf'},
+            b'%PDF-1.7 body',
+        )
+    }
+    fetcher = PageFetcher(
+        transport=pages(routes), resolver=public, files_dir=str(tmp_path)
+    )
+    with pytest.raises(FetchError) as caught:
+        fetcher.fetch('https://docs.test/a.pdf')
+    assert caught.value.code == 'unsupported'
+    assert caught.value.saved.endswith('.pdf')
+    with open(caught.value.saved, 'rb') as file:
+        assert file.read() == b'%PDF-1.7 body'
+
+
+def test_script_built_pages_are_rendered_when_the_html_is_empty():
+    class Renderer:
+        def __init__(self):
+            self.urls = []
+
+        def render(self, url):
+            self.urls.append(url)
+            return '<main><h1>App</h1><p>Rendered text.</p></main>'
+
+    routes = {
+        'https://app.test/': (
+            200,
+            {'content-type': 'text/html'},
+            b'<html><body><div id="root"></div></body></html>',
+        )
+    }
+    renderer = Renderer()
+    reader = Reader(
+        Judge().client(),
+        fetcher=PageFetcher(transport=pages(routes), resolver=public),
+        renderer=renderer,
+    )
+    result = reader.read_url('https://app.test/', 'q?')
+    assert renderer.urls == ['https://app.test/']
+    assert result.rendered is True
+    assert result.text == '## App\nRendered text.'
 
 
 @pytest.mark.parametrize(
@@ -300,7 +445,7 @@ def test_no_match_still_returns_the_closest_blocks():
     page = long_page().replace(MARKER, 'nothing')
     result = Reader(judge.client()).read_text(page, 'q?')
     assert result.status == 'no_match'
-    assert len(result.text) >= ReadConfig().min_output_chars
+    assert tokens.estimate(result.text) >= ReadConfig().min_output_tokens
 
 
 def test_judge_failure_returns_the_page_unjudged():
@@ -310,15 +455,22 @@ def test_judge_failure_returns_the_page_unjudged():
     assert result.status == 'judge_failed'
     assert result.error == 'provider_error'
     assert len(result.text) == 500
-    assert result.page_chars > 500
-    assert '# cut at 500' in format_result(result)
+    assert result.page_tokens > tokens.estimate(result.text)
+    assert '# cut at about' in format_result(result)
 
 
-def test_neighbour_needs_the_same_heading_and_its_own_score():
+def test_each_window_is_rated_and_its_candidates_asked_alone():
     judge = Judge()
-    strict = ReadConfig(thresholds=Thresholds(neighbour=0.99))
-    result = Reader(judge.client(), strict).read_text(long_page(), 'q?')
-    assert 'Wraps a function.' not in result.text
+    result = Reader(judge.client()).read_text(long_page(), 'q?')
+    windows = [b for b in judge.bodies if 'passages' in b['state']]
+    alone = [b for b in judge.bodies if 'passage' in b['state']]
+    assert len(windows) >= 2
+    assert sum(len(b['questions']) for b in windows) == result.blocks_total
+    assert {b['state']['passage'] for b in alone} == {
+        f'If {MARKER} is None the cache grows without bound.',
+        f'{MARKER} | 128',
+    }
+    assert result.judge_requests == len(judge.bodies)
 
 
 # --- choosing ---------------------------------------------------------------
@@ -331,21 +483,21 @@ def blocks_of(*paths, table=0):
 
 def test_choose_keeps_first_block_even_when_the_body_is_long_enough():
     blocks = blocks_of('a', 'b', 'b')
-    keep = choose(blocks, {}, {2: 0.9}, Thresholds(), min_output_chars=10)
+    keep = choose(blocks, {}, {2: 0.9}, Thresholds(), min_output_tokens=10)
     assert keep == {0, 2}
 
 
 def test_choose_adds_neighbours_only_under_the_same_heading():
     blocks = blocks_of('a', 'b', 'b', 'c')
-    first = {1: 0.7, 3: 0.7}
-    keep = choose(blocks, first, {2: 0.9}, Thresholds(), min_output_chars=10)
+    second = {1: 0.7, 2: 0.9, 3: 0.7}
+    keep = choose(blocks, {}, second, Thresholds(), min_output_tokens=10)
     assert keep == {0, 1, 2}
 
 
-def test_choose_neighbour_uses_its_own_score():
-    blocks = blocks_of('a', 'b', 'b', 'b')
-    first = {1: 0.5, 3: 0.65}
-    keep = choose(blocks, first, {2: 0.9}, Thresholds(), min_output_chars=10)
+def test_choose_neighbour_needs_its_own_pass_two_score():
+    blocks = blocks_of('a', 'b', 'b', 'b', 'b')
+    second = {1: 0.5, 2: 0.9, 3: 0.65}
+    keep = choose(blocks, {4: 0.99}, second, Thresholds(), 10)
     assert keep == {0, 2, 3}
 
 
@@ -353,7 +505,7 @@ def test_choose_tops_up_by_pass_two_then_pass_one_score():
     blocks = blocks_of('a', 'b', 'c', 'd', 'e')
     first = {1: 0.3, 2: 0.5, 3: 0.4}
     second = {4: 0.7}
-    keep = choose(blocks, first, second, Thresholds(), min_output_chars=200)
+    keep = choose(blocks, first, second, Thresholds(), min_output_tokens=50)
     assert keep == {0, 4, 2}
 
 
@@ -364,7 +516,7 @@ def test_choose_adds_the_header_row_of_a_kept_table_row():
         Block(2, 'x | 1', ('a',), 'row', 1),
         Block(3, 'y | 2', ('a',), 'row', 1),
     ]
-    keep = choose(blocks, {}, {3: 0.9}, Thresholds(), min_output_chars=1)
+    keep = choose(blocks, {}, {3: 0.9}, Thresholds(), min_output_tokens=1)
     assert keep == {0, 1, 3}
 
 

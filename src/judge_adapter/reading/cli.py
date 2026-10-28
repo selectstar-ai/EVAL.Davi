@@ -28,8 +28,13 @@ from pathlib import Path
 
 from ..decision import build_client, with_options_file
 from ..decision.settings import option
-from .fetch import PageFetcher
-from .reader import ReadConfig, Reader, Thresholds, format_result
+from .reader import (
+    ReadConfig,
+    Reader,
+    Thresholds,
+    default_reader,
+    format_result,
+)
 
 MAX_FILE_BYTES = 5_000_000
 DENIED_NAMES = ('.env*', '*.pem', '*.key', 'id_*')
@@ -81,6 +86,11 @@ def _parser():
     parser.add_argument('--keep', type=float)
     parser.add_argument('--neighbour', type=float)
     parser.add_argument('--json', action='store_true')
+    parser.add_argument(
+        '--no-render',
+        action='store_true',
+        help='do not re-read script-built pages with headless Chrome',
+    )
     return parser
 
 
@@ -121,11 +131,11 @@ def run(argv, env, transport=None, fetcher=None, out=None):
         for host in (option(env, 'read_allow_hosts') or '').split(',')
         if host.strip()
     ]
-    reader = Reader(
-        client,
-        ReadConfig(thresholds=thresholds),
-        fetcher or PageFetcher(allow),
-    )
+    config = ReadConfig(thresholds=thresholds)
+    if fetcher is None:
+        reader = default_reader(client, config, allow, not args.no_render)
+    else:
+        reader = Reader(client, config, fetcher)
     with client:
         if args.file:
             try:

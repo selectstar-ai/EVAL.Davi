@@ -10,7 +10,7 @@ from .blocks import (
     TextBlockParser,
     render,
 )
-from .fetch import FetchError, Page, PageFetcher
+from .fetch import ChromeRenderer, FetchError, Page, PageFetcher
 from .judge import RelevanceJudge
 from .reader import (
     STATUSES,
@@ -19,6 +19,7 @@ from .reader import (
     ReadResult,
     Thresholds,
     choose,
+    default_reader,
     format_result,
 )
 
@@ -26,6 +27,7 @@ __all__ = [
     'STATUSES',
     'Block',
     'BlockParser',
+    'ChromeRenderer',
     'FetchError',
     'HtmlBlockParser',
     'Page',
@@ -37,6 +39,7 @@ __all__ = [
     'TextBlockParser',
     'Thresholds',
     'choose',
+    'default_reader',
     'format_result',
     'render',
 ]

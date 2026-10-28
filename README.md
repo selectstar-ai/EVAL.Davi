@@ -366,18 +366,22 @@ davi-read https://docs.python.org/3/library/functools.html "What happens if lru_
 davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
 ```
 
-- **How:** the page is split into blocks (paragraphs, list items, code, table rows). The judge rates every block in
-  windows of about 9,000 characters (one request per window, one `noul` question per block), rates the likely ones
-  again alone with their neighbouring text, and keeps those at or above the keep threshold, their close neighbours
-  under the same heading, the first block, and the header rows of kept table rows. Pages up to 6,000 characters are
-  returned whole.
+- **How (the same method as [jevfetch](https://github.com/a2sys-ai/jevfetch), our own code):** the page is split
+  into blocks (paragraphs, list items, code, table rows; documentation notes kept; a sentence ending in ":" joined
+  with its list). The judge rates every block in windows of about 3,000 tokens (one request per window, one `noul`
+  question per block); each window's likely blocks are rated again alone with their neighbouring text. Kept: blocks
+  at or above the keep threshold, neighbours under the same heading that pass on their own score, the first block,
+  and the header rows of kept table rows. Pages up to about 2,000 tokens are returned whole. With the judge fixed,
+  the judge model is the only difference from jevfetch.
 - **Judge:** Davi by default, read from the same options as the routing hooks (`DAVI_BASE_URL`, `/davi-route:setup`).
   Because Davi runs on your own server, internal pages stay in house. `--judge jev` uses TypeSafe Jev instead and
   sends the page text to its API.
 - **Fail-open:** if the judge fails, the page is printed unjudged (status `judge_failed`).
 - **Limits:** hosts that resolve to private addresses are refused unless allowed (`--allow-host`, or the
-  `read_allow_hosts` option for an intranet); pages over 5 MB, PDFs and images are refused; pages built with
-  JavaScript are not rendered. The thresholds (0.6 / 0.8 / 0.6) are starting values, not fitted to any judge.
+  `read_allow_hosts` option for an intranet); pages over 5 MB are refused. A PDF or other file is saved and its path
+  printed (`# saved:`) for the agent's file reader. A page whose static HTML has almost no text is re-read with
+  headless Chrome when it is installed (`--no-render` to skip). The thresholds (0.6 / 0.8 / 0.6) are jevfetch's,
+  not fitted to Davi.
 - **Agent setup:** copy [skills/davi-read/SKILL.md](skills/davi-read/SKILL.md) into `.claude/skills/davi-read/`.
 
 On the Python `functools` page (2026-10-27, Davi, one run each), it kept 6 of 143 blocks (1,327 of 32,464

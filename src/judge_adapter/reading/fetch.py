@@ -12,15 +12,24 @@
   changes in between is not caught.
 - The body is read up to ``max_bytes``; a larger page is refused.
 - HTML and text types are decoded (charset from the header, then a
-  ``<meta charset>``, then UTF-8); PDFs, images and other files are
-  refused with their type.
+  ``<meta charset>``, then UTF-8). A PDF, image or other file is refused
+  with its type; it is saved first when ``files_dir`` is set, so an agent
+  can open it with its own file reader.
+- ``ChromeRenderer`` re-reads a page that builds its content with
+  JavaScript (headless Chrome ``--dump-dom``), when Chrome is installed.
 """
 
 from __future__ import annotations
 
+import glob
+import hashlib
 import ipaddress
+import mimetypes
+import os
 import re
 import socket
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
 
@@ -49,10 +58,11 @@ class FetchError(Exception):
     """A page that could not be read. ``code`` is one of blocked, network,
     http, too_large, unsupported."""
 
-    def __init__(self, code, message):
+    def __init__(self, code, message, saved=None):
         super().__init__(f'{code}: {message}')
         self._code = code
         self._message = message
+        self._saved = saved
 
     @property
     def code(self):
@@ -61,6 +71,31 @@ class FetchError(Exception):
     @property
     def message(self):
         return self._message
+
+    @property
+    def saved(self):
+        """Where a refused file was saved, or None."""
+        return self._saved
+
+
+def default_files_dir():
+    """A per-user folder in the system's temporary directory."""
+    owner = f'-{os.getuid()}' if hasattr(os, 'getuid') else ''
+    return os.path.join(tempfile.gettempdir(), f'davi-read{owner}')
+
+
+def save_file(folder, url, media, data):
+    """Save ``data`` under a name derived from the URL; -> the path."""
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    key = hashlib.sha1(url.encode('utf-8')).hexdigest()[:16]
+    path = os.path.join(
+        folder, key + (mimetypes.guess_extension(media) or '.bin')
+    )
+    temporary = f'{path}.{os.getpid()}.tmp'
+    with open(temporary, 'wb') as file:
+        file.write(data)
+    os.replace(temporary, path)
+    return path
 
 
 @dataclass(frozen=True)
@@ -104,8 +139,10 @@ class PageFetcher:
         max_redirects=5,
         transport=None,
         resolver=socket.getaddrinfo,
+        files_dir=None,
     ):
         self._allow = {host.lower() for host in allow_hosts if host}
+        self._files_dir = files_dir
         self._max_bytes = max_bytes
         self._timeout = timeout
         self._max_redirects = max_redirects
@@ -170,10 +207,6 @@ class PageFetcher:
         if response.status_code != 200:
             raise FetchError('http', f'HTTP {response.status_code}')
         media = _media_type(response)
-        if media and media not in TEXT_TYPES and not media.startswith('text/'):
-            raise FetchError(
-                'unsupported', f'{media} is not an HTML or text page'
-            )
         data = bytearray()
         for chunk in response.iter_bytes():
             data.extend(chunk)
@@ -183,6 +216,70 @@ class PageFetcher:
                 )
         body = bytes(data)
         if body.startswith(b'%PDF-'):
-            raise FetchError('unsupported', 'application/pdf is not a page')
+            media = 'application/pdf'
+        if media and media not in TEXT_TYPES and not media.startswith('text/'):
+            saved = None
+            if self._files_dir:
+                try:
+                    saved = save_file(self._files_dir, final_url, media, body)
+                except OSError:
+                    saved = None
+            raise FetchError(
+                'unsupported', f'{media} is not an HTML or text page', saved
+            )
         text = _decode(body, _charset(response, body[:4096]))
         return Page(url, final_url, media or 'text/html', text)
+
+
+class ChromeRenderer:
+    """The DOM of a page after headless Chrome ran its scripts, or None."""
+
+    CANDIDATES = (
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser',
+    )
+    PLAYWRIGHT = (
+        '~/Library/Caches/ms-playwright/chromium_headless_shell-*/'
+        'chrome-headless-shell-mac*/chrome-headless-shell',
+        '~/.cache/ms-playwright/chromium_headless_shell-*/'
+        'chrome-headless-shell-linux*/chrome-headless-shell',
+    )
+
+    def __init__(self, binary=None, budget_ms=8000, timeout=60.0):
+        self._binary = binary
+        self._budget_ms = budget_ms
+        self._timeout = timeout
+
+    def find(self):
+        if self._binary:
+            return self._binary if os.path.exists(self._binary) else None
+        found = [os.environ.get('DAVI_READ_CHROME', '')]
+        for pattern in self.PLAYWRIGHT:
+            found += sorted(glob.glob(os.path.expanduser(pattern)))[-1:]
+        found += list(self.CANDIDATES)
+        return next((c for c in found if c and os.path.exists(c)), None)
+
+    def render(self, url):
+        binary = self.find()
+        if not binary:
+            return None
+        try:
+            done = subprocess.run(
+                [
+                    binary,
+                    '--headless',
+                    '--disable-gpu',
+                    f'--virtual-time-budget={self._budget_ms}',
+                    '--dump-dom',
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return done.stdout or None
