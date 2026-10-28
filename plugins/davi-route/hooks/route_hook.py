@@ -101,21 +101,24 @@ def _on(key):
     return _opt(key) not in OFF_WORDS
 
 
+def install_allowed():
+    # auto_install_deps defaults to on: only an explicit off disables it
+    return not _opt('auto_install_deps') or _on('auto_install_deps')
+
+
 def feature_on(kind):
     if _opt('probe') in TRUE_WORDS:
         return kind != 'setup'
     if kind == 'setup':
         enabled = _on('route_enabled') or _on('stop_verify_enabled')
-        # auto_install_deps defaults to on: only an explicit off disables it
-        install = not _opt('auto_install_deps') or _on('auto_install_deps')
-        return enabled and install
+        return enabled and install_allowed()
     if kind in ('pre', 'post'):
         return _on('route_enabled')
     return _on('stop_verify_enabled')
 
 
-def _has_routing(src):
-    return os.path.isdir(os.path.join(src, 'judge_adapter', 'routing'))
+def _has_package(src, package):
+    return os.path.isdir(os.path.join(src, 'judge_adapter', package))
 
 
 def _install_location(plugins_dir, name):
@@ -131,7 +134,7 @@ def _install_location(plugins_dir, name):
     return location if isinstance(location, str) else None
 
 
-def _marketplace_src(here):
+def _marketplace_src(here, package):
     """``src`` in the marketplace's copy of the repository.
 
     ``here`` is ``<plugins>/cache/<marketplace>/<plugin>/<version>/hooks``
@@ -152,12 +155,13 @@ def _marketplace_src(here):
         os.path.join(plugins_dir, 'marketplaces', name),
     )
     for root in roots:
-        if root and _has_routing(os.path.join(root, 'src')):
+        if root and _has_package(os.path.join(root, 'src'), package):
             return os.path.join(root, 'src')
     return None
 
 
-def find_src():
+def find_src(package='routing'):
+    """The ``src`` folder whose ``judge_adapter`` has ``package``."""
     configured = os.environ.get('DAVI_ROUTE_SRC', '').strip()
     if configured and os.path.isdir(os.path.join(configured, 'judge_adapter')):
         return configured
@@ -165,13 +169,13 @@ def find_src():
     directory = here
     for _ in range(6):
         candidate = os.path.join(directory, 'src')
-        if _has_routing(candidate):
+        if _has_package(candidate, package):
             return candidate
         directory = os.path.dirname(directory)
     bundled = os.path.join(os.path.dirname(here), 'lib')
-    if _has_routing(bundled):
+    if _has_package(bundled, package):
         return bundled
-    return _marketplace_src(here)
+    return _marketplace_src(here, package)
 
 
 def _venv_python():
@@ -185,13 +189,13 @@ def _venv_python():
     return None
 
 
-def _deps_dir():
+def deps_dir():
     data = os.environ.get('CLAUDE_PLUGIN_DATA')
     return os.path.join(data, DEPS_DIR) if data else None
 
 
-def _add_deps_path():
-    deps = _deps_dir()
+def add_deps_path():
+    deps = deps_dir()
     if deps and os.path.isdir(deps) and deps not in sys.path:
         sys.path.insert(0, deps)
 
@@ -275,7 +279,7 @@ def install_dependency(deps, run=subprocess.run, python=None, now=time.time):
 def setup(kind):
     import importlib.util
 
-    _add_deps_path()
+    add_deps_path()
     if importlib.util.find_spec('httpx') is not None:
         return 0
     python = _venv_python()
@@ -285,7 +289,7 @@ def setup(kind):
         )
         if check.returncode == 0:
             return 0
-    deps = _deps_dir()
+    deps = deps_dir()
     if deps is None:
         _note(kind, 'install_failed', 'CLAUDE_PLUGIN_DATA is not set')
         return 0
@@ -299,7 +303,7 @@ def main(kind):
 
     if kind == 'setup':
         return setup(kind)
-    _add_deps_path()
+    add_deps_path()
     if importlib.util.find_spec('httpx') is None:
         python = _venv_python()
         if python and not os.environ.get(REEXEC_GUARD):

@@ -65,7 +65,6 @@ include = [
     "/examples",
     "/hooks",
     "/plugins",
-    "/skills",
     "/commands",
     "/bin",
     "/.claude-plugin",

@@ -314,7 +314,8 @@ A task line has `id`, `prompt` and either `answer` + `grader` (`contains`, `exac
 - `src/judge_adapter/decision/` — Decision core: `ChoiceQuestion` / `NoulQuestion` and the `/v1/systemone`
   clients (`DaviClient`, `JevClient`) with strict reading and five error codes
 - `src/judge_adapter/reading/` — `davi-read`: blocks, fetching limits, two-pass judging, choosing, the command
-- `skills/davi-read/` — Agent skill for `davi-read`
+- `plugins/davi-route/skills/davi-read/`, `plugins/davi-route/hooks/davi_read.py` — The `davi-read` skill and the
+  plugin's launcher for it
 - `examples/routing/` — Example task and arm files
 - `docs/` — Routing details (Korean), legacy plugin and reference docs
 - `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py` — Tests
@@ -360,6 +361,16 @@ the answer-checking modes offline, judge the cheap answers with `davi-route judg
 verbatim with their heading path. An agent can call it instead of WebFetch, which returns a paraphrase. It is a new
 feature with no measured results yet: it is not shown to improve answers, only to return the source text.
 
+It comes with the `davi-route` plugin: install the plugin, give it your Davi server once, and Claude Code uses the
+`davi-read` skill for pages where it needs a specific fact. httpx is installed for the plugin at the first call.
+
+```text
+/plugin install davi-route@datumo
+/davi-route:setup http://<davi-host>:<port> --off     # --off: davi-read only, routing stays off
+```
+
+From a checkout, the same command runs in a terminal:
+
 ```bash
 pip install -e .            # provides the davi-read command
 davi-read https://docs.python.org/3/library/functools.html "What happens if lru_cache maxsize is None?"
@@ -383,7 +394,8 @@ davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
   printed (`# saved:`) for the agent's file reader. A page whose static HTML has almost no text is re-read with
   headless Chrome when it is installed (`--no-render` to skip). The thresholds (0.6 / 0.8 / 0.6) are jevfetch's,
   not fitted to Davi.
-- **Agent setup:** copy [skills/davi-read/SKILL.md](skills/davi-read/SKILL.md) into `.claude/skills/davi-read/`.
+- **Agent setup:** the plugin's [davi-read skill](plugins/davi-route/skills/davi-read/SKILL.md) tells Claude when to
+  use it and how to read the result; it runs the plugin's own copy of the code (`plugins/davi-route/lib`).
 
 On the Python `functools` page (2026-10-27, Davi, one run each), it kept 6 of 143 blocks (1,327 of 32,464
 characters) in English and 7 of 143 (1,410 of 27,358) in Korean, both including the sentence that answers the

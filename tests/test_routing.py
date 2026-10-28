@@ -1074,6 +1074,98 @@ def test_installed_copy_runs_on_its_bundle_alone(tmp_path):
     assert 'opus' in output['additionalContext']
 
 
+def load_davi_read():
+    path = PLUGIN / 'hooks' / 'davi_read.py'
+    spec = importlib.util.spec_from_file_location('davi_read_test', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_davi_read_finds_the_data_folder_claude_code_gives_it(
+    monkeypatch, tmp_path
+):
+    # commands run through the Bash tool get no CLAUDE_PLUGIN_DATA
+    davi_read = load_davi_read()
+    monkeypatch.delenv('CLAUDE_PLUGIN_DATA', raising=False)
+    here = str(tmp_path / 'plugins/cache/datumo/davi-route/0.6.0/hooks')
+    expected = str(tmp_path / 'plugins' / 'data' / 'davi-route-datumo')
+    assert davi_read.plugin_data(here) == expected
+    assert davi_read.plugin_data(str(PLUGIN / 'hooks')) is None
+    monkeypatch.setenv('CLAUDE_PLUGIN_DATA', '/given')
+    assert davi_read.plugin_data(here) == '/given'
+
+
+def run_installed_davi_read(tmp_path, args, extra_env, pydeps=True):
+    """``hooks/davi_read.py`` of a copy laid out as a marketplace install,
+    without site packages, CLAUDE_PLUGIN_DATA or the user's options file."""
+    plugins = tmp_path / 'plugins'
+    installed = plugins / 'cache' / 'datumo' / 'davi-route' / '0.6.0'
+    if not installed.exists():
+        shutil.copytree(PLUGIN, installed)
+    data = plugins / 'data' / 'davi-route-datumo'
+    data.mkdir(parents=True, exist_ok=True)
+    if pydeps and not (data / 'pydeps').exists():
+        purelib = sysconfig.get_paths()['purelib']
+        (data / 'pydeps').symlink_to(purelib, target_is_directory=True)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(('DAVI_ROUTE_', 'CLAUDE_PLUGIN_'))
+        and key not in ('PYTHONPATH', 'DAVI_BASE_URL')
+    }
+    env['DAVI_ROUTE_CONFIG'] = str(tmp_path / 'no-options.json')
+    env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, '-S', str(installed / 'hooks' / 'davi_read.py')]
+        + args,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+
+def test_installed_davi_read_runs_on_its_bundle_alone(tmp_path):
+    page = tmp_path / 'page.md'
+    page.write_text('# Retention\n\nLogs are kept for 30 days.\n')
+    url = {'DAVI_ROUTE_DAVI_BASE_URL': 'http://127.0.0.1:9'}
+    args = ['--file', str(page), 'How long are logs kept?']
+    result = run_installed_davi_read(tmp_path, args, url)
+    assert result.returncode == 0, result.stderr
+    assert '# status: passthrough' in result.stdout
+    assert 'Logs are kept for 30 days.' in result.stdout
+    # no server URL anywhere: a configuration error that names the fix
+    result = run_installed_davi_read(tmp_path, args, {})
+    assert result.returncode == 2
+    assert '/davi-route:setup' in result.stderr
+
+
+def test_installed_davi_read_without_httpx_says_how_to_get_it(tmp_path):
+    off = {
+        'DAVI_ROUTE_DAVI_BASE_URL': 'http://127.0.0.1:9',
+        'DAVI_ROUTE_AUTO_INSTALL_DEPS': 'false',
+    }
+    result = run_installed_davi_read(
+        tmp_path, ['https://example.com', 'q'], off, pydeps=False
+    )
+    assert result.returncode == 2 and result.stdout == ''
+    assert 'httpx is missing' in result.stderr
+
+
+def test_davi_read_skill_ships_with_the_plugin_that_runs_it():
+    # the repository root is the davi plugin; it has no davi-read command
+    assert not (ROOT / 'skills').exists()
+    text = (PLUGIN / 'skills' / 'davi-read' / 'SKILL.md').read_text('utf-8')
+    front, _, body = text.partition('\n---\n')
+    assert 'name: davi-read' in front
+    assert 'allowed-tools: Bash(python3:*)' in front
+    assert 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py"' in body
+    assert (PLUGIN / 'hooks' / 'davi_read.py').is_file()
+    # claude.ai does not install a plugin with a top-level bin/ folder
+    assert not (PLUGIN / 'bin').exists()
+
+
 def test_setup_installs_httpx_with_pip_target(tmp_path):
     launcher = load_launcher()
     deps = str(tmp_path / 'data' / 'pydeps')

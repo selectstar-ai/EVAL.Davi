@@ -14,7 +14,7 @@
     {
       "name": "davi-route",
       "source": "./plugins/davi-route",
-      "description": "EXPERIMENTAL: route Claude Code subagents to a cheap, mid or strong model with a verifier (Davi, Jev or Claude); off by default, fail-open."
+      "description": "EXPERIMENTAL: route Claude Code subagents to a cheap, mid or strong model with a verifier (Davi, Jev or Claude); off by default, fail-open. Includes davi-read: the parts of a page that answer a question, chosen by Davi."
     }
   ]
 }
