@@ -45,10 +45,14 @@ PYTHONPATH=src pytest -q
 - Hooks are off by default and **fail-open**: a hook error or a slow judge leaves the call unchanged, and a failed
   judgment follows `on_error` (default: the cheap model, never a block). A hook never raises into Claude Code.
 - No task, answer or key text in logs; keys are read lazily and scrubbed from error details.
-- `plugins/davi-route/hooks/route_hook.py` uses the standard library only until it imports the hook module.
-- An installed plugin is self-contained: its code comes from `plugins/davi-route/lib`, and the SessionStart `setup`
-  installs only `httpx` (into `${CLAUDE_PLUGIN_DATA}/pydeps`), only when a feature is on and `auto_install_deps` is not
-  off.
+- `plugins/davi-route/hooks/route_hook.py` and `hooks/davi_read.py` use the standard library only until they import
+  the hook module or the `davi-read` command.
+- An installed plugin is self-contained: its code comes from `plugins/davi-route/lib`, and only `httpx` is installed
+  (into `${CLAUDE_PLUGIN_DATA}/pydeps`), never when `auto_install_deps` is off: by the SessionStart `setup` when a hook
+  feature is on, or by the first `davi-read` call. Commands run through the Bash tool get no `CLAUDE_PLUGIN_DATA`, so
+  `davi_read.py` derives it (`<plugins>/data/<plugin>-<marketplace>`).
+- No top-level `bin/` in the plugin: claude.ai does not install a plugin that has one. The `davi-read` skill runs
+  `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py"`.
 - Option precedence: `DAVI_ROUTE_<KEY>` variables, then `~/.claude/davi-route.json` (written by `/davi-route:setup`,
   read by the launcher on every call), then userConfig. The claude.ai plugin page has no option fields, so the setup
   skill is the supported way to configure an installed plugin. Keep it a skill (`skills/setup`), not a `commands/` file

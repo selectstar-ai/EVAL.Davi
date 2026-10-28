@@ -1,10 +1,10 @@
 # Copyright 2026 hundredeuk2
 # SPDX-License-Identifier: Apache-2.0
-"""The copy of the hook's modules inside ``plugins/davi-route/lib``.
+"""The copy of the plugin's modules inside ``plugins/davi-route/lib``.
 
 A marketplace install copies only ``plugins/davi-route``, so the plugin
-carries the ``judge_adapter`` modules its hooks import. The copy is
-generated, never edited: ``davi-route bundle`` rewrites it and
+carries the ``judge_adapter`` modules its hooks and ``davi-read`` import.
+The copy is generated, never edited: ``davi-route bundle`` rewrites it and
 ``davi-route bundle --check`` (and a test) fails when it is stale.
 
 Which modules: the ones loaded after importing ``ENTRY_MODULES`` in a fresh
@@ -22,6 +22,8 @@ from pathlib import Path
 ENTRY_MODULES = (
     'judge_adapter.routing.hooks',
     'judge_adapter.routing.verifiers',
+    # the davi-read command (hooks/davi_read.py)
+    'judge_adapter.reading.cli',
     # imported inside functions on the hook path
     'judge_adapter.plugin_common',
     'judge_adapter.contract',

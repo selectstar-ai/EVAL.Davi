@@ -308,7 +308,8 @@ davi-route analyze --cache runs/x --cheap cheap --strong strong
 - `src/judge_adapter/decision/` — 공통 판정 모듈: `ChoiceQuestion` / `NoulQuestion`과 `/v1/systemone` client
   (`DaviClient`, `JevClient`), 엄격한 응답 검증과 다섯 가지 오류 코드
 - `src/judge_adapter/reading/` — `davi-read`: 블록 나누기, 페이지 받기 제한, 2단계 판정, 고르기, 명령
-- `skills/davi-read/` — `davi-read` 에이전트 skill
+- `plugins/davi-route/skills/davi-read/`, `plugins/davi-route/hooks/davi_read.py` — `davi-read` skill과 플러그인의
+  실행 파일
 - `examples/routing/` — 예시 작업·arm 파일
 - `docs/` — 라우팅 실험 기록(한국어), 레거시 플러그인과 레퍼런스 문서
 - `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py` — 테스트
@@ -354,6 +355,16 @@ PYTHONPATH=src pytest -q
 출력합니다. 에이전트가 요약된 글을 돌려주는 WebFetch 대신 부를 수 있습니다. 아직 측정 결과가 없는 새 기능입니다. 답이 더
 정확해진다는 근거는 없고, 원문을 그대로 돌려준다는 점만 보장합니다.
 
+`davi-route` 플러그인에 들어 있습니다. 플러그인을 설치하고 Davi 서버 주소를 한 번 알려 주면, Claude Code가 페이지에서
+특정 내용을 찾아야 할 때 `davi-read` skill을 씁니다. httpx는 처음 쓸 때 플러그인용으로 설치됩니다.
+
+```text
+/plugin install davi-route@datumo
+/davi-route:setup http://<davi-host>:<port> --off     # --off: davi-read만 쓰고 라우팅은 끈 채로 둠
+```
+
+저장소를 받아 터미널에서 직접 쓸 수도 있습니다.
+
 ```bash
 pip install -e .            # davi-read 명령 설치
 davi-read https://docs.python.org/ko/3/library/functools.html "lru_cache의 maxsize를 None으로 하면 어떻게 되나요?"
@@ -374,8 +385,8 @@ davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
   옵션). 5 MB 넘는 페이지는 거부합니다. PDF 등 파일은 저장하고 경로를 알려 줍니다(`# saved:`). 정적 HTML에 글이 거의
   없는 페이지는 headless Chrome이 설치돼 있으면 다시 읽습니다(`--no-render`로 끔). 경계값(0.6 / 0.8 / 0.6)은
   jevfetch의 값이며 Davi에 맞춰 정하지 않았습니다.
-- **에이전트 설정:** [skills/davi-read/SKILL.md](../skills/davi-read/SKILL.md)를 `.claude/skills/davi-read/`에
-  복사합니다.
+- **에이전트 설정:** 플러그인의 [davi-read skill](../plugins/davi-route/skills/davi-read/SKILL.md)이 Claude에게 언제
+  쓰고 결과를 어떻게 읽는지 알려 줍니다. 실행되는 코드는 플러그인에 들어 있는 복사본(`plugins/davi-route/lib`)입니다.
 
 Python `functools` 문서(2026-10-27, Davi, 각 1회)에서 영어는 143블록 중 6개(32,464자 중 1,327자), 한국어는
 143블록 중 7개(27,358자 중 1,410자)를 남겼고, 둘 다 질문에 답하는 문장을 포함했습니다. 약 6초 걸렸습니다.
