@@ -18,8 +18,10 @@ difference between the two:
    by pass-2, then pass-1 score.
 
 Added for davi-read: the judge is Davi by default (internal pages stay in
-house); when the judge fails the page goes out unjudged (``judge_failed``,
-cut at ``failopen_chars``); fetching refuses private addresses. Thresholds
+house); a failed judge request is tried again, and a window that still fails
+has its blocks included unjudged (``unjudged_blocks``); only when the whole
+judge fails does the page go out unjudged (``judge_failed``, cut at
+``failopen_chars``); fetching refuses private addresses. Thresholds
 are jevfetch's values, a starting point until they are fitted per model.
 """
 
@@ -68,6 +70,8 @@ class ReadConfig:
     concurrency: int = 16
     render_below_tokens: int = 200
     failopen_chars: int = 40000
+    retries: int = 3
+    backoff: float = 0.5
 
 
 @dataclass
@@ -84,6 +88,7 @@ class ReadResult:
     provider: str = ''
     noul_mode: str = ''
     rendered: bool = False
+    unjudged_blocks: int = 0
     saved: Optional[str] = None
     error: Optional[str] = None
 
@@ -125,9 +130,16 @@ class Reader:
     """Fetches and filters pages with one decision client."""
 
     def __init__(
-        self, client, config=None, fetcher=None, renderer=None, clock=None
+        self,
+        client,
+        config=None,
+        fetcher=None,
+        renderer=None,
+        clock=None,
+        sleep=time.sleep,
     ):
         self._client = client
+        self._sleep = sleep
         self._config = config or ReadConfig()
         self._fetcher = fetcher or PageFetcher()
         self._renderer = renderer
@@ -167,11 +179,14 @@ class Reader:
             window_blocks=self._config.window_blocks,
             context_chars=self._config.context_chars,
             concurrency=self._config.concurrency,
+            retries=self._config.retries,
+            backoff=self._config.backoff,
+            sleep=self._sleep,
         )
         thresholds = self._config.thresholds
         started = self._clock()
         try:
-            first, second = judge.rate(blocks, query, thresholds.candidate)
+            rating = judge.rate(blocks, query, thresholds.candidate)
         except DecisionError as error:
             return self._result(
                 'judge_failed',
@@ -183,17 +198,23 @@ class Reader:
                 **common,
             )
         keep = choose(
-            blocks, first, second, thresholds, self._config.min_output_tokens
+            blocks,
+            rating.first,
+            rating.second,
+            thresholds,
+            self._config.min_output_tokens,
         )
+        keep |= rating.unjudged
         status = (
             'filtered'
-            if any(p >= thresholds.keep for p in second.values())
+            if any(p >= thresholds.keep for p in rating.second.values())
             else 'no_match'
         )
         return self._result(
             status,
             render(blocks, keep),
             blocks_kept=len(keep),
+            unjudged_blocks=len(rating.unjudged),
             judge_requests=judge.requests,
             judge_seconds=self._clock() - started,
             **common,
@@ -256,6 +277,11 @@ def format_result(result):
         return '\n'.join(lines)
     if result.rendered:
         lines.append('# rendered with a headless browser')
+    if result.unjudged_blocks:
+        lines.append(
+            f'# note: {result.unjudged_blocks} blocks could not be judged '
+            '(judge errors) and are included unjudged'
+        )
     if result.status == 'judge_failed':
         lines.append(f'# error: {result.error}')
         if result.out_tokens < result.page_tokens:

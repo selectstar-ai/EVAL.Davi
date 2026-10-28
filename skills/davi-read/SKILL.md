@@ -31,6 +31,8 @@ The `# ` lines at the top give the status. `## ` lines are the page's heading pa
 | `passthrough` | The page was short and is shown whole. |
 | `no_match` | No passage passed the threshold; the closest ones are shown. Ask a more specific question, or read the page another way. |
 | `judge_failed` | The judge failed, so the page is shown unjudged (possibly cut; the header says where). Read it as a normal page. |
+
+If a `# note:` line says some blocks could not be judged, the judge failed for part of the page; those blocks are included as they are, so read them too.
 | `empty` | No text could be read, often because the page builds its content with JavaScript. Find another source. |
 | `fetch_error` | The page could not be read (exit code 1): a network or HTTP error, a private address that is not allowed, or a PDF or other file. If a `# saved:` line follows, the file was downloaded to that path: open it with your file reader. Otherwise read it another way or find another source. |
 

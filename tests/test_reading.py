@@ -12,7 +12,8 @@ import json
 import httpx
 import pytest
 
-from judge_adapter.decision import DaviClient
+from judge_adapter.decision import DaviClient, JevClient
+from judge_adapter.keys import CredentialMissing
 from judge_adapter.reading import (
     FetchError,
     HtmlBlockParser,
@@ -48,8 +49,9 @@ def private(host, port):
 class Judge:
     """A fake Davi: P(true) is 0.95 when the passage holds MARKER."""
 
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, fail_when=None):
         self._fail = fail
+        self._fail_when = fail_when  # body -> HTTP status, or None to answer
         self._bodies = []
 
     @property
@@ -62,6 +64,9 @@ class Judge:
             self._bodies.append(body)
             if self._fail:
                 return httpx.Response(500, text='down')
+            status = self._fail_when(body) if self._fail_when else None
+            if status:
+                return httpx.Response(status, json={'error': 'ValueError: x'})
             state = body['state']
             answers = {}
             for key in body['questions']:
@@ -231,6 +236,36 @@ def test_menus_inside_main_content_are_dropped():
     blocks = HtmlBlockParser().parse(html)
     assert [(b.path, b.text) for b in blocks] == [
         (('Python',), 'Python is a programming language.')
+    ]
+
+
+def test_a_list_item_keeps_its_paragraphs_and_code_together():
+    html = (
+        '<h1>Rebase</h1><ol>'
+        f'<li><p>Stop the rebase with{PAD}</p><pre>git rebase --abort</pre>'
+        '</li>'
+        '<li><p>Skip the commit that caused the merge conflict with</p>'
+        '<div><pre>git rebase --skip</pre></div></li></ol>'
+    )
+    texts = [b.text for b in HtmlBlockParser().parse(html)]
+    assert texts == [
+        f'- Stop the rebase with{PAD}\ngit rebase --abort',
+        '- Skip the commit that caused the merge conflict with\n'
+        'git rebase --skip',
+    ]
+
+
+def test_unclosed_and_nested_list_items():
+    html = (
+        f'<h1>L</h1><ul><li>first{PAD}<li>second{PAD}</ul>'
+        f'<ul><li>top{PAD}<ul><li>sub one</li><li>sub two</li></ul></li>'
+        '</ul>'
+    )
+    texts = [b.text for b in HtmlBlockParser().parse(html)]
+    assert texts == [
+        f'- first{PAD}',
+        f'- second{PAD}',
+        f'- top{PAD}\n- sub one\n- sub two',
     ]
 
 
@@ -448,15 +483,91 @@ def test_no_match_still_returns_the_closest_blocks():
     assert tokens.estimate(result.text) >= ReadConfig().min_output_tokens
 
 
+def no_wait(seconds):
+    return None
+
+
+def holds_answer(body):
+    """True for requests that hold the answer paragraph (not the table)."""
+    state = body['state']
+    texts = [p['text'] for p in state.get('passages', [])]
+    texts.append(state.get('passage', ''))
+    return any('grows without bound' in text for text in texts)
+
+
 def test_judge_failure_returns_the_page_unjudged():
     judge = Judge(fail=True)
     config = ReadConfig(failopen_chars=500)
-    result = Reader(judge.client(), config).read_text(long_page(), 'q?')
+    reader = Reader(judge.client(), config, sleep=no_wait)
+    result = reader.read_text(long_page(), 'q?')
     assert result.status == 'judge_failed'
     assert result.error == 'provider_error'
+    windows = sum('passages' in b['state'] for b in judge.bodies)
+    assert windows == 4 * len(
+        {tuple(p['id'] for p in b['state']['passages']) for b in judge.bodies}
+    )  # every window tried once and retried three times
     assert len(result.text) == 500
     assert result.page_tokens > tokens.estimate(result.text)
     assert '# cut at about' in format_result(result)
+
+
+def test_a_transient_error_is_retried_with_growing_waits():
+    seen = set()
+    waits = []
+
+    def first_try_fails(body):
+        key = json.dumps(body['state'], sort_keys=True)
+        if key in seen:
+            return None
+        seen.add(key)
+        return 503
+
+    judge = Judge(fail_when=first_try_fails)
+    result = Reader(judge.client(), sleep=waits.append).read_text(
+        long_page(), 'q?'
+    )
+    assert result.status == 'filtered'
+    assert result.unjudged_blocks == 0
+    assert set(waits) == {0.5}
+    assert result.judge_requests == len(judge.bodies)
+
+
+def test_a_window_that_keeps_failing_is_included_unjudged():
+    judge = Judge(fail_when=lambda b: 500 if holds_answer(b) else None)
+    reader = Reader(judge.client(), sleep=no_wait)
+    result = reader.read_text(long_page(), 'q?')
+    assert result.status == 'filtered'  # the table row's window was judged
+    assert result.unjudged_blocks > 0
+    assert f'If {MARKER} is None the cache grows without bound.' in result.text
+    assert 'could not be judged' in format_result(result)
+
+
+def test_a_rejected_window_is_not_retried():
+    judge = Judge(fail_when=lambda b: 422 if holds_answer(b) else None)
+    reader = Reader(judge.client(), sleep=no_wait)
+    result = reader.read_text(long_page(), 'q?')
+    failed = [b for b in judge.bodies if holds_answer(b)]
+    assert len(failed) == 1
+    assert result.unjudged_blocks > 0
+
+
+def test_a_failed_second_pass_keeps_the_candidate():
+    judge = Judge(fail_when=lambda b: 500 if 'passage' in b['state'] else None)
+    reader = Reader(judge.client(), sleep=no_wait)
+    result = reader.read_text(long_page(), 'q?')
+    assert result.unjudged_blocks == 2
+    assert f'If {MARKER} is None the cache grows without bound.' in result.text
+    assert f'{MARKER} | 128' in result.text
+
+
+def test_a_missing_key_fails_the_whole_judge():
+    def no_key():
+        raise CredentialMissing('no key')
+
+    client = JevClient(no_key, transport=Judge().transport())
+    result = Reader(client, sleep=no_wait).read_text(long_page(), 'q?')
+    assert result.status == 'judge_failed'
+    assert result.error == 'credential_missing'
 
 
 def test_each_window_is_rated_and_its_candidates_asked_alone():

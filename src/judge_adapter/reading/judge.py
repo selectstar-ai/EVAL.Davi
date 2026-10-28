@@ -13,6 +13,13 @@ Two passes, the same method as jevfetch:
   A window's candidates start as soon as that window is rated, not after
   the slowest window.
 
+A request that fails with a timeout or a server error is tried again (up to
+``retries`` times, waiting ``backoff`` x 1, 2, 4 ... seconds). If a window
+still fails, only its blocks are reported as unjudged and the rest of the
+page is judged as usual; a candidate whose pass-2 request fails is reported
+unjudged too, so the reader keeps it rather than lose it. Only when every
+window fails, or the key is missing, does ``rate`` raise.
+
 The condition that a qualifying rule, limit or exception counts as part of
 the answer, and that the query may hold several sub-questions or keywords,
 is written into the question itself: Davi's native noul does not use
@@ -22,9 +29,11 @@ criteria (engineering_plan/05).
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
-from ..decision import NoulQuestion
+from ..decision import DecisionError, NoulQuestion
 from . import tokens
 
 PASS1 = (
@@ -47,10 +56,20 @@ CRITERIA = {
     'false': 'It is about something else, or only names a topic from `query`.',
 }
 ITEM_OVERHEAD_TOKENS = 20  # the id and section sent with each passage
+RETRY_CODES = frozenset({'timeout', 'provider_error'})
+
+
+@dataclass(frozen=True)
+class Rating:
+    """Pass-1 and pass-2 scores by block id, and the ids left unjudged."""
+
+    first: dict
+    second: dict
+    unjudged: frozenset = frozenset()
 
 
 class RelevanceJudge:
-    """``rate(blocks, query, candidate)`` -> (pass 1, pass 2) scores by id."""
+    """``rate(blocks, query, candidate)`` -> ``Rating``."""
 
     def __init__(
         self,
@@ -60,8 +79,14 @@ class RelevanceJudge:
         window_blocks=120,
         context_chars=400,
         concurrency=16,
+        retries=3,
+        backoff=0.5,
+        sleep=time.sleep,
     ):
         self._client = client
+        self._retries = retries
+        self._backoff = backoff
+        self._sleep = sleep
         self._window_tokens = window_tokens
         self._window_blocks = window_blocks
         self._context_chars = context_chars
@@ -93,30 +118,65 @@ class RelevanceJudge:
 
     def rate(self, blocks, query, candidate):
         """Pass 1 for every block, pass 2 for the candidates of each window.
-        A failed request raises ``DecisionError``."""
+        Raises ``DecisionError`` only when every window fails or the key is
+        missing."""
         position = {block.id: index for index, block in enumerate(blocks)}
-        first, second = {}, {}
-        with (
-            ThreadPoolExecutor(self._concurrency) as windows,
-            ThreadPoolExecutor(self._concurrency) as alone,
-        ):
+        groups = self.windows(blocks)
+        first, second, unjudged, errors = {}, {}, set(), []
+        with ThreadPoolExecutor(self._concurrency) as windows:
+            with ThreadPoolExecutor(self._concurrency) as alone:
 
-            def window(group):
-                scores = self._window(group, query)
-                picked = [i for i, p in scores.items() if p >= candidate]
-                again = list(
-                    alone.map(
-                        lambda i: self._alone(blocks, position[i], query),
-                        picked,
+                def window(group):
+                    try:
+                        scores = self._retry(self._window, group, query)
+                    except DecisionError as error:
+                        if error.code == 'credential_missing':
+                            raise
+                        return {}, {}, {b.id for b in group}, error
+                    picked = [i for i, p in scores.items() if p >= candidate]
+                    again = list(
+                        alone.map(
+                            lambda i: self._alone_or_none(
+                                blocks, position[i], query
+                            ),
+                            picked,
+                        )
                     )
-                )
-                return scores, dict(zip(picked, again))
+                    rescored = {
+                        i: p for i, p in zip(picked, again) if p is not None
+                    }
+                    failed = {i for i, p in zip(picked, again) if p is None}
+                    return scores, rescored, failed, None
 
-            # merged in page order, so ties are broken the same way each run
-            for scores, rescored in windows.map(window, self.windows(blocks)):
-                first.update(scores)
-                second.update(rescored)
-        return first, second
+                # merged in page order, so ties break the same way each run
+                for scores, rescored, failed, error in windows.map(
+                    window, groups
+                ):
+                    first.update(scores)
+                    second.update(rescored)
+                    unjudged |= failed
+                    if error is not None:
+                        errors.append(error)
+        if groups and len(errors) == len(groups):
+            raise errors[-1]
+        return Rating(first, second, frozenset(unjudged))
+
+    def _retry(self, call, *args):
+        for attempt in range(self._retries + 1):
+            try:
+                return call(*args)
+            except DecisionError as error:
+                if error.code not in RETRY_CODES or attempt == self._retries:
+                    raise
+                self._sleep(self._backoff * 2**attempt)
+
+    def _alone_or_none(self, blocks, index, query):
+        try:
+            return self._retry(self._alone, blocks, index, query)
+        except DecisionError as error:
+            if error.code == 'credential_missing':
+                raise
+            return None
 
     # --- requests ------------------------------------------------------------
     def _count(self):

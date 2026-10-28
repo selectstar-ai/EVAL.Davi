@@ -376,7 +376,8 @@ davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
 - **Judge:** Davi by default, read from the same options as the routing hooks (`DAVI_BASE_URL`, `/davi-route:setup`).
   Because Davi runs on your own server, internal pages stay in house. `--judge jev` uses TypeSafe Jev instead and
   sends the page text to its API.
-- **Fail-open:** if the judge fails, the page is printed unjudged (status `judge_failed`).
+- **Fail-open:** a failed judge request is tried again (up to 3 times); a part of the page that still cannot be
+  judged is included unjudged, and only when the whole judge fails is the page printed unjudged (`judge_failed`).
 - **Limits:** hosts that resolve to private addresses are refused unless allowed (`--allow-host`, or the
   `read_allow_hosts` option for an intranet); pages over 5 MB are refused. A PDF or other file is saved and its path
   printed (`# saved:`) for the agent's file reader. A page whose static HTML has almost no text is re-read with

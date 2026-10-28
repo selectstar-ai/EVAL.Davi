@@ -314,6 +314,11 @@ class _HtmlCollector(HTMLParser):
         self._row_tags = []
         self._cell = None
         self._in_thead = False
+        # a list item is one block: its paragraphs, code and sub-items are
+        # gathered as segments until the item closes
+        self._items = 0
+        self._segments = []
+        self._prefix = ''
         self.blocks = []
 
     # --- helpers -----------------------------------------------------------
@@ -325,8 +330,9 @@ class _HtmlCollector(HTMLParser):
             path.append(self._term)
         return tuple(path)
 
-    def _emit(self, text, kind, head=False):
-        text = text.strip('\n') if kind == 'code' else collapse(text)
+    def _emit(self, text, kind, head=False, raw=False):
+        if not raw:
+            text = text.strip('\n') if kind == 'code' else collapse(text)
         if text:
             self.blocks.append(
                 Block(
@@ -340,7 +346,36 @@ class _HtmlCollector(HTMLParser):
                 )
             )
 
+    def _segment(self):
+        """Close the text gathered so far as one segment of the item."""
+        if self._buffer:
+            text = ''.join(self._buffer)
+            self._buffer = []
+            if self._kind == 'code':
+                text = text.strip('\n')
+            else:
+                text = collapse(text)
+                if text and self._prefix:
+                    text, self._prefix = self._prefix + text, ''
+            if text.strip():
+                self._segments.append((self._kind, text))
+        self._kind = 'text'
+
+    def _finish_item(self):
+        self._segment()
+        if self._segments:
+            parts = [text for _, text in self._segments]
+            if self._segments[0][0] == 'code':
+                parts.insert(0, '-')
+            else:
+                parts[0] = '- ' + parts[0]
+            self._emit('\n'.join(parts), 'item', raw=True)
+        self._segments, self._prefix = [], ''
+
     def _flush(self):
+        if self._items:
+            self._segment()
+            return
         if self._buffer:
             text = ''.join(self._buffer)
             kind = self._kind
@@ -364,6 +399,8 @@ class _HtmlCollector(HTMLParser):
 
     # --- HTMLParser hooks --------------------------------------------------
     def handle_starttag(self, tag, attrs):
+        if tag == 'li' and self._stack and self._stack[-1][0] == 'li':
+            self.handle_endtag('li')  # an item closed by the next one
         attributes = dict(attrs)
         classes = set((attributes.get('class') or '').split())
         skipping = (
@@ -407,8 +444,12 @@ class _HtmlCollector(HTMLParser):
             self._pre += 1
             self._kind = 'code'
         elif tag == 'li':
-            self._flush()
-            self._kind = 'item'
+            if self._items:
+                self._segment()
+                self._prefix = '- '
+            else:
+                self._flush()
+            self._items += 1
         elif tag == 'dt':
             self._flush()
             self._term_parts = []
@@ -417,6 +458,8 @@ class _HtmlCollector(HTMLParser):
         elif tag == 'thead':
             self._in_thead = True
         elif tag == 'table':
+            if self._items:
+                self._finish_item()  # rows are blocks of their own
             self._flush()
             self._tables += 1
             self._table = self._tables
@@ -497,6 +540,12 @@ class _HtmlCollector(HTMLParser):
             self._in_thead = False
         elif tag == 'table':
             self._table = 0
+        elif tag == 'li' and self._items:
+            self._items -= 1
+            if self._items:
+                self._segment()
+            else:
+                self._finish_item()
         elif tag in ('li', 'dd') or tag in FLUSH_TAGS:
             self._flush()
 
@@ -510,6 +559,9 @@ class _HtmlCollector(HTMLParser):
 
     def close(self):
         super().close()
+        if self._items:
+            self._items = 0
+            self._finish_item()
         self._flush()
 
 
