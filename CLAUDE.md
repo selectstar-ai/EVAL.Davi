@@ -13,6 +13,15 @@ PYTHONPATH=src davi-route bundle       # refresh plugins/davi-route/lib after sr
 PYTHONPATH=src pytest -q
 ```
 
+## Branches
+
+- `main` is the stable branch: it is what `davi-route@datumo` installs. Nothing is pushed or merged into it directly.
+- `dev` collects finished features. Every change starts as a branch from `dev`, named for the work and never for an AI
+  tool (no `claude` or `codex`), and goes into `dev` through a PR.
+- On a release date, `dev` goes into `main` with one PR (`dev` → `main`).
+- To try `dev`: `claude --plugin-dir plugins/davi-route` from a checkout, or `/plugin marketplace add
+  selectstar-ai/EVAL.Davi#dev` (only one marketplace per name: removing `datumo` first uninstalls its plugins).
+
 ## PEP 8
 
 - 4-space indentation, no tabs. At most **79 characters** per line.
