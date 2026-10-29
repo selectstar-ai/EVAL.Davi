@@ -6,10 +6,11 @@
     davi-read --file PATH "question"  read a local HTML, Markdown or text file
 
 The judge is Davi by default (``--judge jev`` for TypeSafe Jev). Options
-come from ``DAVI_ROUTE_<KEY>``, ``~/.claude/davi-route.json`` (written by
-``/davi-route:setup``) and ``CLAUDE_PLUGIN_OPTION_<KEY>``, as for the
-routing hooks: ``davi_base_url``, ``noul_mode``, ``read_allow_hosts``
-(comma-separated hosts that may resolve to private addresses).
+come from ``DAVI_ROUTE_<KEY>``, ``CLAUDE_PLUGIN_OPTION_<KEY>`` (the plugin's
+settings dialog) and ``~/.claude/davi-route.json`` (written by
+``/davi-route:setup``), as for the routing hooks: ``davi_base_url``,
+``noul_mode``, ``read_allow_hosts`` (comma-separated hosts that may resolve
+to private addresses).
 
 Exit codes: 0 with a result (including no_match, empty and judge_failed,
 which still print the page), 1 when the page could not be read, 2 for a

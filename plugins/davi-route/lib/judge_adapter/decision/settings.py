@@ -3,10 +3,11 @@
 """Build a decision client from environment-style options.
 
 Option ``key`` is read from ``DAVI_ROUTE_<KEY>``, then
-``CLAUDE_PLUGIN_OPTION_<KEY>`` (the same precedence as the routing hooks).
-``with_options_file`` adds the options saved by ``/davi-route:setup``
-(``~/.claude/davi-route.json``) as unset ``DAVI_ROUTE_<KEY>`` values, as the
-plugin launcher does. Keys are never read here: the client reads them at
+``CLAUDE_PLUGIN_OPTION_<KEY>`` (the plugin's settings dialog; the same
+precedence as the routing hooks). ``with_options_file`` adds the options
+saved by ``/davi-route:setup`` (``~/.claude/davi-route.json``) as
+``DAVI_ROUTE_<KEY>`` values for keys set by neither, as the plugin launcher
+does. Keys are never read here: the client reads them at
 its first request. The decision core does not import the routing package,
 so the variable names are repeated here (a test keeps them in step).
 """
@@ -95,8 +96,8 @@ def config_path(env):
 
 
 def with_options_file(env, path=None):
-    """A copy of ``env`` plus the saved options as unset
-    ``DAVI_ROUTE_<KEY>``."""
+    """A copy of ``env`` plus the saved options as ``DAVI_ROUTE_<KEY>``,
+    for keys set neither that way nor by the settings dialog."""
     merged = dict(env)
     try:
         with open(path or config_path(env), encoding='utf-8') as file:
@@ -108,9 +109,9 @@ def with_options_file(env, path=None):
     for key, value in data.items():
         if value is None or not isinstance(key, str) or not key.isidentifier():
             continue
-        name = 'DAVI_ROUTE_' + key.upper()
-        if not _clean(merged.get(name)):
-            merged[name] = value if isinstance(value, str) else str(value)
+        names = [prefix + key.upper() for prefix in OPTION_PREFIXES]
+        if not any(_clean(merged.get(name)) for name in names):
+            merged[names[0]] = value if isinstance(value, str) else str(value)
     return merged
 
 

@@ -14,11 +14,14 @@ form)::
   marketplace install runs: it copies only ``plugins/davi-route``); the
   ``src`` of the marketplace's copy of the repository.
 - Options: ``DAVI_ROUTE_<KEY>`` environment variables (also from the
-  ``env`` of Claude Code settings), then the JSON file written by
+  ``env`` of Claude Code settings), then the plugin's settings dialog
+  (``CLAUDE_PLUGIN_OPTION_<KEY>``), then the JSON file written by
   ``/davi-route:setup`` (``~/.claude/davi-route.json``, or
-  ``DAVI_ROUTE_CONFIG``), then the plugin options
-  (``CLAUDE_PLUGIN_OPTION_<KEY>``). The file is read on every call and its
-  values are passed on as ``DAVI_ROUTE_<KEY>`` when that variable is unset.
+  ``DAVI_ROUTE_CONFIG``). The dialog holds the connection only
+  (``DIALOG_KEYS``); the features and every other option live in the file.
+  Dialog values for other keys, saved by an older version of the plugin,
+  are dropped. The file is read on every call and its values are passed on
+  as ``DAVI_ROUTE_<KEY>`` when neither of the others is set.
 - Fast path: if the hook's feature is off (``route_enabled`` for pre/post,
   ``stop_verify_enabled`` for stop, either for setup) and probe mode is
   off, it exits 0 before reading stdin or importing anything.
@@ -41,7 +44,15 @@ CONFIG_FILE = 'davi-route.json'
 CONFIG_KEY = re.compile(r'^[a-z][a-z0-9_]*$')
 KINDS = ('pre', 'post', 'stop', 'subagent_stop', 'setup')
 REEXEC_GUARD = '_DAVI_ROUTE_HOOK_REEXEC'
-OPTION_PREFIXES = ('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_')
+DIALOG_PREFIX = 'CLAUDE_PLUGIN_OPTION_'
+OPTION_PREFIXES = ('DAVI_ROUTE_', DIALOG_PREFIX)
+# plugin.json userConfig: the connection; the rest is set by the setup skill
+DIALOG_KEYS = (
+    'davi_base_url',
+    'davi_api_key',
+    'typesafe_api_key',
+    'anthropic_api_key',
+)
 TRUE_WORDS = ('1', 'true', 'yes', 'on')
 OFF_WORDS = ('', '0', 'false', 'no', 'off')
 VENV_PYTHONS = (('venv', 'bin', 'python'), ('venv', 'Scripts', 'python.exe'))
@@ -78,14 +89,37 @@ def read_config(path):
     return data if isinstance(data, dict) else {}
 
 
+def drop_stale_options():
+    """Forget dialog values for keys the settings dialog no longer has.
+
+    Claude Code keeps exporting options saved by an older version of the
+    plugin (``route_enabled`` and the others before 0.7.0); they would
+    switch features on that the user can no longer see.
+    """
+    kept = {DIALOG_PREFIX + key.upper() for key in DIALOG_KEYS}
+    for name in list(os.environ):
+        if name.startswith(DIALOG_PREFIX) and name not in kept:
+            del os.environ[name]
+
+
+def dialog_value(text):
+    """A ``${user_config.KEY}`` value a skill passed on; None when unset
+    (Claude Code leaves the placeholder in place) or empty."""
+    text = (text or '').strip()
+    if not text or '${' in text:
+        return None
+    return text
+
+
 def load_config_file():
-    """Pass the file's options on as unset ``DAVI_ROUTE_<KEY>`` variables."""
+    """Pass the file's options on as ``DAVI_ROUTE_<KEY>`` variables, for
+    keys set neither by such a variable nor by the settings dialog."""
     for key, value in read_config(config_path()).items():
         if value is None or not CONFIG_KEY.match(str(key)):
             continue
-        name = 'DAVI_ROUTE_' + key.upper()
-        if not os.environ.get(name, '').strip():
-            os.environ[name] = _env_value(value)
+        names = ('DAVI_ROUTE_' + key.upper(), DIALOG_PREFIX + key.upper())
+        if not any(os.environ.get(name, '').strip() for name in names):
+            os.environ[names[0]] = _env_value(value)
 
 
 def _opt(key):
@@ -333,6 +367,7 @@ def main(kind):
 
 if __name__ == '__main__':
     hook_kind = sys.argv[1] if len(sys.argv) > 1 else ''
+    drop_stale_options()
     load_config_file()
     if hook_kind not in KINDS or not feature_on(hook_kind):
         sys.exit(0)
