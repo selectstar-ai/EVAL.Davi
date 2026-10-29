@@ -149,18 +149,27 @@ claude plugin marketplace add selectstar-ai/EVAL.Davi
 claude plugin install davi-route@datumo
 ```
 
-그다음 Claude Code(터미널 또는 데스크톱 앱의 **Code 탭**)에서 Davi 서버를 지정합니다. 라우팅이 켜지고(`tiers`
-모드) 서버 응답을 확인합니다.
+설정은 두 곳에 나뉘어 있습니다.
+
+- **플러그인 설정 창**에는 연결 정보를 넣습니다. Davi 서버 주소와 필요할 때만 쓰는 키입니다. 플러그인을 켤 때 Claude
+  Code가 물어보고, 나중에는 `/plugin` → Installed → davi-route → **Configure options**에서 바꿉니다. 키는 시스템
+  키체인에 저장됩니다.
+- **`/davi-route:setup`**으로 기능을 켜고 끕니다. Claude Code(터미널 또는 데스크톱 앱의 **Code 탭**)에서:
 
 ```
-/davi-route:setup http://<your-davi-host>:<port> --set log_file=/tmp/route.jsonl
+/davi-route:setup on          # 서브에이전트 라우팅 켜기 (tiers 방식, Davi 판정), 서버 응답 확인
+/davi-route:setup             # 무엇이 켜져 있고 어느 서버를 쓰는지 보기
+/davi-route:setup off         # 라우팅 끄기
+/davi-route:setup stop on     # 끝났는지 확인 켜기 (실험 기능)
 ```
 
-`setup`은 skill이므로 말로 요청해도 됩니다("davi-route에 http://host:port의 Davi 서버를 써줘"). 요청이 오면
-`python3 .../configure.py` 실행을 승인하세요. 확인이나 끄기도 같은 방식입니다(`--show`, `--off`).
+`setup`은 skill이므로 말로 요청해도 됩니다("davi-route 라우팅 켜줘"). 요청이 오면 `python3 .../configure.py` 실행을
+승인하세요. 플러그인 설정 창이 없는 claude.ai에서는 같은 명령에 주소를 넣습니다:
+`/davi-route:setup http://<your-davi-host>:<port> on`.
 
-그다음 서브에이전트를 쓰는 작업을 요청합니다("Agent 도구를 써서 ..."). `Agent` 호출마다 모델이 정해지고, hook 호출마다
-JSON 한 줄이 기록됩니다(단계, tier, 모델, 지연. 작업 텍스트는 기록하지 않음).
+그다음 서브에이전트를 쓰는 작업을 요청합니다("Agent 도구를 써서 ..."). `Agent` 호출마다 모델이 정해집니다. hook 호출마다
+JSON 한 줄을 남기려면(단계, tier, 모델, 지연. 작업 텍스트는 기록하지 않음) `/davi-route:setup --set
+log_file=/tmp/route.jsonl`로 기록 파일을 정한 뒤 봅니다.
 
 ```bash
 davi-route hooklog /tmp/route.jsonl
@@ -175,18 +184,18 @@ Davi는 우리 회사 모델입니다. Davi 서버가 없다면 같은 3단 라�
 `https://api.typesafe.ai/v1/systemone`으로 같은 다섯 단계 질문에 답합니다. 실험에서 Jev 라우팅은 Davi 다음이었고
 (69.4% vs 71.1%) 모델 실행 비용은 더 낮았습니다.
 
-1. [TypeSafe](https://docs.typesafe.ai/introduction)에서 API 키를 받아, 키가 채팅을 거치지 않도록 Claude Code를
-   시작하기 전에 export합니다.
+1. [TypeSafe](https://docs.typesafe.ai/introduction)에서 API 키를 받아 플러그인 설정 창(**TypeSafe API key**)에
+   넣습니다. 키가 채팅을 거치지 않습니다. Claude Code를 시작하기 전에 export해도 됩니다.
 
    ```bash
    export JEV_API_KEY=<your-typesafe-key>     # TYPESAFE_API_KEY도 됨
    claude
    ```
 
-2. Jev로 라우팅을 켭니다. Davi URL이 없으면 `setup`이 라우팅을 스스로 켜지 않으므로 직접 켭니다.
+2. Jev로 라우팅을 켭니다.
 
    ```
-   /davi-route:setup --judge jev --mode tiers --set route_enabled=true --set log_file=/tmp/route.jsonl
+   /davi-route:setup on --judge jev
    ```
 
    skill 없이:
@@ -209,9 +218,8 @@ Davi는 우리 회사 모델입니다. Davi 서버가 없다면 같은 3단 라�
 
 ### setup skill 없이
 
-claude.ai 플러그인 페이지에는 플러그인 옵션 입력란이 없으므로, skill은 옵션을 `~/.claude/davi-route.json`에
-씁니다. hook은 호출마다 이 파일을 읽습니다. 같은 옵션을 환경 변수(셸 또는 `settings.json`의 `env`)로도 줄 수
-있습니다.
+`setup`은 `~/.claude/davi-route.json`에 씁니다. hook은 호출마다 이 파일을 읽습니다. 같은 옵션을 환경 변수(셸
+또는 `settings.json`의 `env`)로도 줄 수 있습니다.
 
 ```bash
 export DAVI_ROUTE_DAVI_BASE_URL=http://<your-davi-host>:<port>   # POST /v1/systemone
@@ -221,8 +229,9 @@ export DAVI_ROUTE_LOG_FILE=$PWD/route.jsonl
 claude --plugin-dir plugins/davi-route
 ```
 
-옵션 우선순위: `DAVI_ROUTE_<KEY>` 환경 변수, 그다음 `~/.claude/davi-route.json`(`DAVI_ROUTE_CONFIG`로 위치 변경),
-그다음 플러그인 옵션(`claude plugin configure`, `CLAUDE_PLUGIN_OPTION_<KEY>`로 읽음).
+옵션 우선순위: `DAVI_ROUTE_<KEY>` 환경 변수, 그다음 플러그인 설정 창(연결 정보만, `CLAUDE_PLUGIN_OPTION_<KEY>`로
+읽음), 그다음 `~/.claude/davi-route.json`(`DAVI_ROUTE_CONFIG`로 위치 변경). 0.7.0 전 버전에서 설정 창에 있던 값
+(`route_enabled` 등)은 이제 설정 창에서 읽지 않으니 `setup`으로 다시 정하세요.
 
 ### 의존성
 
@@ -243,19 +252,36 @@ claude --plugin-dir plugins/davi-route
 
 ### 설정
 
+**기능** (`/davi-route:setup`):
+
+| 명령 | 키 | 기본값 | 용도 |
+| --- | --- | --- | --- |
+| `on` / `off` | `route_enabled` | 꺼짐 | 서브에이전트 라우팅 |
+| `stop on` / `stop off` | `stop_verify_enabled` | 꺼짐 | Stop 시 끝났는지 확인 ([예정 기능](#예정-기능)) |
+| `--mode` | `route_mode` | `tiers` | `tiers`(난이도별 3모델). 다른 방식: [예정 기능](#예정-기능) |
+| `--judge` | `route_judge` | `davi` | `davi`, `jev`, `claude`, `fake` |
+
+**연결 정보** (플러그인 설정 창):
+
+| 칸 | 키 | 용도 |
+| --- | --- | --- |
+| Davi server URL | `davi_base_url` | Davi 서버(`POST /v1/systemone`). 라우팅과 davi-read가 씀. `DAVI_BASE_URL`보다 우선 |
+| Davi server key | `davi_api_key` | 서버가 키를 요구할 때만. `DAVI_API_KEY`보다 우선 (davi-read는 `DAVI_API_KEY`를 읽음) |
+| TypeSafe API key | `typesafe_api_key` | Jev 판정. 환경 변수 `JEV_API_KEY` 또는 `TYPESAFE_API_KEY`도 됨 |
+| Anthropic API key | `anthropic_api_key` | Claude 판정. `ANTHROPIC_API_KEY`도 됨 |
+
+**고급 설정** (`/davi-route:setup --set KEY=VALUE`, 대부분 기본값이면 충분):
+
 | 키 | 기본값 | 용도 |
 | --- | --- | --- |
-| `route_enabled` | `false` | 서브에이전트 라우팅 켜기 |
-| `route_mode` | `post` | `tiers`(난이도별 3모델)를 쓰세요. Davi URL로 `setup`하면 설정됩니다. 다른 모드: [예정 기능](#예정-기능) |
-| `route_judge` | `davi` | `davi`, `jev`, `claude`, `fake` |
-| `davi_base_url` / `davi_api_key` | (없음) | Davi 서버(`POST /v1/systemone`)와 선택 키. `DAVI_BASE_URL` / `DAVI_API_KEY` 환경 변수보다 우선 |
-| `typesafe_api_key` | (없음) | Jev 키. 환경 변수 `JEV_API_KEY` 또는 `TYPESAFE_API_KEY`도 됨 |
 | `route_cheap_model` / `route_mid_model` / `route_strong_model` | `haiku` / `sonnet` / `opus` | 모델 문자열 |
 | `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | 난이도 기준값 (K-HLE에서 Davi로 맞춤) |
 | `route_agent_types` | (전체) | 쉼표로 구분한 `subagent_type` 필터 |
 | `on_error` | `accept` | 판정 실패 시: `accept`(저비용 모델, fail-open) 또는 `escalate` |
 | `wall_budget_seconds` | `25` | hook 호출당 시간 제한. 넘으면 아무것도 바꾸지 않음 |
 | `log_file` | (없음) | 모든 hook 호출의 JSONL 로그 |
+| `auto_install_deps` | `true` | httpx가 없으면 플러그인 데이터 폴더에 설치 |
+| `read_allow_hosts` | (없음) | davi-read: 읽어도 되는 사내 호스트(쉼표로 구분) |
 
 모든 옵션, 효과, 판정 프롬프트: [routing.md](routing.md).
 
@@ -346,7 +372,7 @@ PYTHONPATH=src pytest -q
 | `route_pin_cheap` | `always` | `post`: `Agent` 호출에 저비용 모델을 언제 지정할지 |
 | `stop_verify_enabled` | `false` | Stop 시 완료 검사 (최대 `stop_max_blocks`번 막음) |
 
-`setup`으로 켭니다. 예: `/davi-route:setup --mode post` 또는 `--set stop_verify_enabled=true`. 답 검사 모드를
+`setup`으로 켭니다. 예: `/davi-route:setup --mode post` 또는 `/davi-route:setup stop on`. 답 검사 모드를
 오프라인으로 측정하려면 `davi-route judge ... --kind answer`로 저비용 모델의 답을 판정하세요.
 
 ## 실험 기능: `davi-read`로 페이지 읽기
@@ -355,12 +381,13 @@ PYTHONPATH=src pytest -q
 출력합니다. 에이전트가 요약된 글을 돌려주는 WebFetch 대신 부를 수 있습니다. 아직 측정 결과가 없는 새 기능입니다. 답이 더
 정확해진다는 근거는 없고, 원문을 그대로 돌려준다는 점만 보장합니다.
 
-`davi-route` 플러그인에 들어 있습니다. 플러그인을 설치하고 Davi 서버 주소를 한 번 알려 주면, Claude Code가 페이지에서
-특정 내용을 찾아야 할 때 `davi-read` skill을 씁니다. httpx는 처음 쓸 때 플러그인용으로 설치됩니다.
+`davi-route` 플러그인에 들어 있습니다. 플러그인을 설치하고 설정 창에 Davi 서버 주소를 넣으면, Claude Code가
+페이지에서 특정 내용을 찾아야 할 때 `davi-read` skill을 씁니다. 따로 켤 기능은 없고, httpx는 처음 쓸 때 플러그인용으로
+설치됩니다. 설정 창이 없는 곳(claude.ai)에서는 `setup`에 주소를 넣습니다.
 
 ```text
 /plugin install davi-route@datumo
-/davi-route:setup http://<davi-host>:<port> --off     # --off: davi-read만 쓰고 라우팅은 끈 채로 둠
+/davi-route:setup http://<davi-host>:<port>     # 플러그인 설정 창이 없을 때만
 ```
 
 저장소를 받아 터미널에서 직접 쓸 수도 있습니다.
@@ -376,7 +403,8 @@ davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
   3,000토큰 단위 창마다 요청 하나로 블록별 `noul` 질문을 보내고, 각 창의 가능성 있는 블록은 앞뒤 글과 함께 하나씩 다시
   묻습니다. 남기는 것은 남김 경계값 이상인 블록, 같은 제목 아래 이웃 중 자기 점수로 통과한 블록, 첫 블록, 남긴 표 행의
   머리글 행입니다. 약 2,000토큰 이하 페이지는 그대로 돌려줍니다. 방식이 같으므로 jevfetch와의 차이는 판정 모델뿐입니다.
-- **판정자:** 기본은 Davi이며, 라우팅 훅과 같은 설정(`DAVI_BASE_URL`, `/davi-route:setup`)을 읽습니다. Davi는 자체
+- **판정자:** 기본은 Davi이며, 라우팅 훅과 같은 설정(플러그인 설정 창, `DAVI_BASE_URL`, `/davi-route:setup`)을
+  읽습니다. Davi는 자체
   서버에서 돌기 때문에 내부 문서가 밖으로 나가지 않습니다. `--judge jev`를 쓰면 TypeSafe Jev로 판정하고 페이지 글이
   그 API로 전송됩니다.
 - **실패해도 원문 전달:** 판정 요청이 실패하면 최대 3번 다시 시도합니다. 그래도 판정하지 못한 부분은 판정 없이

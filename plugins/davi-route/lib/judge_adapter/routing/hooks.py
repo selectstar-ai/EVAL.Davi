@@ -65,7 +65,7 @@ class Settings:
     """Plugin options (``DAVI_ROUTE_<KEY>`` over ``CLAUDE_PLUGIN_OPTION_``)."""
 
     route_enabled: bool = False
-    route_mode: str = 'post'
+    route_mode: str = 'tiers'
     route_judge: str = 'davi'
     route_threshold: float = 0.5
     route_pre_threshold: float = 0.5
@@ -112,7 +112,7 @@ class Settings:
         route_judge = opt_choice(env, 'route_judge', 'davi', JUDGES)
         return cls(
             route_enabled=opt_flag(env, 'route_enabled', False),
-            route_mode=opt_choice(env, 'route_mode', 'post', ROUTE_MODES),
+            route_mode=opt_choice(env, 'route_mode', 'tiers', ROUTE_MODES),
             route_judge=route_judge,
             route_threshold=_unit(env, 'route_threshold', 0.5),
             route_pre_threshold=_unit(env, 'route_pre_threshold', 0.5),

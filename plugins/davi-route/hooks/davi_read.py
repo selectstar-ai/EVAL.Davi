@@ -6,14 +6,18 @@
 Standard library only until the command runs. The ``davi-read`` skill runs
 it::
 
-    python3 ${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py URL "question"
-    python3 ${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py --file PATH "question"
+    python3 ${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py \
+        --dialog-url "${user_config.davi_base_url}" URL "question"
+    python3 ${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py \
+        --dialog-url "${user_config.davi_base_url}" --file PATH "question"
 
 - Finds the ``judge_adapter`` code as the hook launcher does
   (``route_hook.find_src``), in a folder that has the ``reading`` package.
-- Options are the plugin's: ``DAVI_ROUTE_<KEY>``, then
-  ``~/.claude/davi-route.json`` (``/davi-route:setup``), then
-  ``CLAUDE_PLUGIN_OPTION_<KEY>``. Only ``davi_base_url`` is needed.
+- Options are the plugin's: ``DAVI_ROUTE_<KEY>``, then the settings
+  dialog, then ``~/.claude/davi-route.json`` (``/davi-route:setup``). Only
+  ``davi_base_url`` is needed. Commands run through the Bash tool get no
+  ``CLAUDE_PLUGIN_OPTION_<KEY>``, so the skill passes the dialog's URL with
+  a leading ``--dialog-url`` (keys from the dialog do not reach it).
 - Needs httpx, from ``python3`` or the plugin's ``pydeps`` folder. Commands
   run through the Bash tool get no ``CLAUDE_PLUGIN_DATA``, so for an
   installed plugin the folder is derived as Claude Code names it:
@@ -74,6 +78,17 @@ def ensure_httpx(install=route_hook.install_dependency):
     return importlib.util.find_spec('httpx') is not None
 
 
+def take_dialog_url(argv):
+    """``argv`` without a leading ``--dialog-url VALUE``; a set VALUE becomes
+    the dialog's ``davi_base_url``, as the hooks receive it."""
+    if argv[:1] != ['--dialog-url'] or len(argv) < 2:
+        return argv
+    url = route_hook.dialog_value(argv[1])
+    if url:
+        os.environ[route_hook.DIALOG_PREFIX + 'DAVI_BASE_URL'] = url
+    return argv[2:]
+
+
 def _fail(message):
     sys.stderr.write(f'davi-read: {message}\n')
     return 2
@@ -81,6 +96,8 @@ def _fail(message):
 
 def main(argv, install=route_hook.install_dependency):
     here = os.path.dirname(os.path.abspath(__file__))
+    route_hook.drop_stale_options()
+    argv = take_dialog_url(argv)
     route_hook.load_config_file()
     data = plugin_data(here)
     if data:

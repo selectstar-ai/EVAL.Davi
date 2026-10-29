@@ -62,10 +62,17 @@ PYTHONPATH=src pytest -q
   `davi_read.py` derives it (`<plugins>/data/<plugin>-<marketplace>`).
 - No top-level `bin/` in the plugin: claude.ai does not install a plugin that has one. The `davi-read` skill runs
   `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py"`.
-- Option precedence: `DAVI_ROUTE_<KEY>` variables, then `~/.claude/davi-route.json` (written by `/davi-route:setup`,
-  read by the launcher on every call), then userConfig. The claude.ai plugin page has no option fields, so the setup
-  skill is the supported way to configure an installed plugin. Keep it a skill (`skills/setup`), not a `commands/` file
-  with a `!` line: claude.ai-synced copies do not run `!` lines.
-- `plugin.json` userConfig keys must exist on `Settings` with the same defaults (checked by a test).
+- Settings live in two places. The settings dialog (`plugin.json` userConfig) holds the connection only: the Davi URL
+  and the keys (`DIALOG_KEYS` in `route_hook.py`, checked by a test). `/davi-route:setup` turns the features on and
+  off (`on`, `off`, `stop on|off`, `--mode`, `--judge`) and sets every other option with `--set`. Do not add feature
+  switches or tuning values to the dialog.
+- Option precedence: `DAVI_ROUTE_<KEY>` variables, then the settings dialog, then `~/.claude/davi-route.json`
+  (written by `/davi-route:setup`, read by the launcher on every call). Claude Code keeps exporting dialog values an
+  older plugin version saved; the launchers drop every `CLAUDE_PLUGIN_OPTION_<KEY>` outside `DIALOG_KEYS`.
+- Commands run through the Bash tool get no `CLAUDE_PLUGIN_OPTION_<KEY>`, so both skills pass the dialog's URL as
+  `--dialog-url "${user_config.davi_base_url}"`; an unset option arrives as that placeholder and counts as unset.
+  Dialog keys (sensitive) cannot be passed this way.
+- The claude.ai plugin page has no settings dialog, so `/davi-route:setup` also takes the Davi URL. Keep it a skill
+  (`skills/setup`), not a `commands/` file with a `!` line: claude.ai-synced copies do not run `!` lines.
 - Run `davi-route generate` without `ANTHROPIC_API_KEY` in the environment: `claude -p` would bill that key instead
   of the logged-in plan.

@@ -544,6 +544,7 @@ def agent_payload(
 def settings(**options):
     env = {
         'DAVI_ROUTE_ROUTE_ENABLED': 'true',
+        'DAVI_ROUTE_ROUTE_MODE': 'post',
         'DAVI_ROUTE_STOP_VERIFY_ENABLED': 'true',
     }
     env.update(
@@ -874,6 +875,7 @@ def test_main_end_to_end_with_log(tmp_path):
     log = tmp_path / 'h.jsonl'
     env = {
         'DAVI_ROUTE_ROUTE_ENABLED': 'true',
+        'DAVI_ROUTE_ROUTE_MODE': 'post',
         'DAVI_ROUTE_LOG_FILE': str(log),
         'CLAUDE_PLUGIN_DATA': str(tmp_path),
     }
@@ -934,7 +936,14 @@ def run_launcher(kind, payload, env_extra, tmp_path):
         for key, value in os.environ.items()
         if not key.startswith(prefixes)
     }
-    env.update({'CLAUDE_PLUGIN_DATA': str(tmp_path), **env_extra})
+    env.update(
+        {
+            'CLAUDE_PLUGIN_DATA': str(tmp_path),
+            # not the user's ~/.claude/davi-route.json
+            'DAVI_ROUTE_CONFIG': str(tmp_path / 'davi-route.json'),
+            **env_extra,
+        }
+    )
     return subprocess.run(
         [sys.executable, LAUNCHER, kind],
         input=json.dumps(payload),
@@ -958,6 +967,7 @@ def test_launcher_fast_path_and_probe(tmp_path):
     assert result.returncode == 0 and 'DAVI-PROBE-A-L' in context
     jev_env = {
         'DAVI_ROUTE_ROUTE_ENABLED': 'true',
+        'DAVI_ROUTE_ROUTE_MODE': 'post',
         'DAVI_ROUTE_ROUTE_JUDGE': 'jev',
     }
     result = run_launcher('post', payload, jev_env, tmp_path)
@@ -1052,7 +1062,9 @@ def test_installed_copy_runs_on_its_bundle_alone(tmp_path):
     env.update(
         {
             'CLAUDE_PLUGIN_DATA': str(data),
+            'DAVI_ROUTE_CONFIG': str(tmp_path / 'no-options.json'),
             'DAVI_ROUTE_ROUTE_ENABLED': 'true',
+            'DAVI_ROUTE_ROUTE_MODE': 'post',
             'DAVI_ROUTE_ROUTE_JUDGE': 'fake',
         }
     )
@@ -1072,6 +1084,9 @@ def test_installed_copy_runs_on_its_bundle_alone(tmp_path):
     assert result.returncode == 0, result.stderr
     output = json.loads(result.stdout)['hookSpecificOutput']
     assert 'opus' in output['additionalContext']
+
+
+DIALOG_URL_ARG = '--dialog-url "${user_config.davi_base_url}"'
 
 
 def load_davi_read():
@@ -1161,6 +1176,8 @@ def test_davi_read_skill_ships_with_the_plugin_that_runs_it():
     assert 'name: davi-read' in front
     assert 'allowed-tools: Bash(python3:*)' in front
     assert 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py"' in body
+    # the Bash tool gets no plugin options: the dialog's URL is passed on
+    assert body.count(DIALOG_URL_ARG) == body.count('davi_read.py" ')
     assert (PLUGIN / 'hooks' / 'davi_read.py').is_file()
     # claude.ai does not install a plugin with a top-level bin/ folder
     assert not (PLUGIN / 'bin').exists()
@@ -1240,11 +1257,52 @@ def test_options_file_fills_unset_variables(tmp_path, monkeypatch):
     assert launcher.config_path() == str(tmp_path / 'cfg' / 'davi-route.json')
 
 
-def test_setup_command_writes_merges_and_checks(tmp_path, monkeypatch):
+def test_settings_dialog_holds_the_connection_only(tmp_path, monkeypatch):
+    launcher = load_launcher()
+    path = tmp_path / 'davi-route.json'
+    path.write_text(
+        json.dumps(
+            {'davi_base_url': 'http://file.test', 'route_enabled': False}
+        )
+    )
+    environ = {
+        'DAVI_ROUTE_CONFIG': str(path),
+        'CLAUDE_PLUGIN_OPTION_DAVI_BASE_URL': 'http://dialog.test',
+        # saved by a version whose dialog still had the switches
+        'CLAUDE_PLUGIN_OPTION_ROUTE_ENABLED': 'true',
+        'CLAUDE_PLUGIN_OPTION_STOP_VERIFY_ENABLED': 'true',
+    }
+    monkeypatch.setattr(launcher.os, 'environ', environ)
+    launcher.drop_stale_options()
+    launcher.load_config_file()
+    assert not launcher.feature_on('post') and not launcher.feature_on('stop')
+    assert 'DAVI_ROUTE_DAVI_BASE_URL' not in environ  # the dialog wins
+    settings = Settings.from_env(environ)
+    assert not settings.route_enabled and settings.route_mode == 'tiers'
+    assert launcher.dialog_value('${user_config.davi_base_url}') is None
+    assert launcher.dialog_value(' http://x.test ') == 'http://x.test'
+    davi_read = load_davi_read()
+    monkeypatch.setattr(davi_read.os, 'environ', {})
+    argv = ['--dialog-url', 'http://d.test', 'URL', 'q']
+    assert davi_read.take_dialog_url(argv) == ['URL', 'q']
+    assert davi_read.os.environ == {
+        'CLAUDE_PLUGIN_OPTION_DAVI_BASE_URL': 'http://d.test'
+    }
+    unset = ['--dialog-url', '${user_config.davi_base_url}', 'URL', 'q']
+    davi_read.os.environ.clear()
+    assert davi_read.take_dialog_url(unset) == ['URL', 'q']
+    assert davi_read.os.environ == {}
+    assert davi_read.take_dialog_url(['URL', 'q']) == ['URL', 'q']
+
+
+def test_setup_command_switches_features_and_shows_them(tmp_path, monkeypatch):
     configure = load_configure()
     path = tmp_path / 'davi-route.json'
     monkeypatch.setenv('DAVI_ROUTE_CONFIG', str(path))
-    monkeypatch.delenv('DAVI_ROUTE_ROUTE_MODE', raising=False)
+    for key in list(os.environ):
+        if key.startswith('DAVI_ROUTE_') and key != 'DAVI_ROUTE_CONFIG':
+            monkeypatch.delenv(key)
+    monkeypatch.delenv('DAVI_API_KEY', raising=False)
     checked = []
 
     def check(url, key=None):
@@ -1256,18 +1314,43 @@ def test_setup_command_writes_merges_and_checks(tmp_path, monkeypatch):
         code = configure.main(list(argv), check=check, out=out)
         return code, out.getvalue()
 
-    code, text = run('"http://davi.test:20100/"')
-    assert code == 0 and 'Davi server http://davi.test:20100: ok' in text
-    assert json.loads(path.read_text()) == {
-        'davi_base_url': 'http://davi.test:20100',
+    def saved():
+        return json.loads(path.read_text())
+
+    code, text = run()  # nothing saved yet: shows the defaults
+    assert code == 0 and not path.exists()
+    assert 'routing: off (mode tiers, judge davi)' in text
+    assert 'Davi server: not set' in text and not checked
+    code, text = run('on')
+    assert saved() == {
         'route_enabled': True,
         'route_judge': 'davi',
         'route_mode': 'tiers',
     }
     assert oct(path.stat().st_mode & 0o777) == '0o600'
-    code, _ = run(
+    assert 'no Davi server URL' in text and 'Configure options' in text
+    # a URL given here (no settings dialog) is saved, nothing else changes
+    code, text = run('"http://davi.test:20100/"', 'stop', 'on')
+    assert saved()['davi_base_url'] == 'http://davi.test:20100'
+    assert saved()['stop_verify_enabled'] is True
+    assert 'Davi server: http://davi.test:20100 (setup)' in text
+    assert checked[-1] == ('http://davi.test:20100', None)
+    # the settings dialog's URL wins; the skill passes it on
+    dialog = ['--dialog-url', 'http://dialog.test:1']
+    code, text = run(*dialog)
+    assert 'Davi server: http://dialog.test:1 (settings dialog)' in text
+    assert checked[-1][0] == 'http://dialog.test:1'
+    code, text = run(*dialog, 'http://other.test:2')
+    assert 'the settings dialog has a Davi URL' in text
+    # an unset dialog option reaches the script as its placeholder
+    code, text = run('--dialog-url', '${user_config.davi_base_url}')
+    assert '(setup)' in text
+    calls = len(checked)
+    code, text = run(
         '--mode',
         'post',
+        '--judge',
+        'jev',
         '--set',
         'log_file=/tmp/r.jsonl',
         '--set',
@@ -1275,21 +1358,24 @@ def test_setup_command_writes_merges_and_checks(tmp_path, monkeypatch):
         '--set',
         'route_threshold=0.4',
     )
-    saved = json.loads(path.read_text())
-    assert saved['route_mode'] == 'post' and saved['route_threshold'] == 0.4
-    assert saved['davi_base_url'] == 'http://davi.test:20100'
-    assert len(checked) == 1  # no URL given: no server check
+    assert saved()['route_mode'] == 'post' and saved()['route_judge'] == 'jev'
+    assert saved()['route_threshold'] == 0.4
+    assert len(checked) == calls  # options only: no server check
+    assert 'secret-0000' not in text and 'davi_api_key=***' in text
+    assert 'log_file=/tmp/r.jsonl' in text
+    code, text = run('off')
+    assert saved()['route_enabled'] is False
+    assert saved()['stop_verify_enabled'] is True
+    code, text = run('stop', 'off')
+    assert saved()['stop_verify_enabled'] is False
+    code, _ = run('on', '--off')  # --off: both, as before
+    assert not saved()['route_enabled'] and not saved()['stop_verify_enabled']
+    monkeypatch.setenv('DAVI_ROUTE_ROUTE_ENABLED', 'true')
     code, text = run('--show')
-    assert 'secret-0000' not in text and '***' in text
-    assert checked[-1] == ('http://davi.test:20100', 'secret-0000')
-    code, _ = run('--off')
-    saved = json.loads(path.read_text())
-    assert saved['route_enabled'] is False
-    assert saved['stop_verify_enabled'] is False
-    code, text = run('davi.test:20100')
-    assert code == 2 and 'http://' in text
-    code, text = run('--set', 'no-equals')
-    assert code == 2
+    assert 'routing: on' in text and 'override route_enabled' in text
+    for bad in (['davi.test:20100'], ['stop'], ['maybe'], ['--set', 'x']):
+        code, text = run(*bad)
+        assert code == 2 and text.startswith('error:'), bad
 
 
 def test_setup_command_checks_a_real_http_server():
@@ -1339,7 +1425,9 @@ def test_setup_skill_runs_the_script_without_shell_preexecution():
     front, _, body = text.partition('\n---\n')
     assert 'name: setup' in front
     assert 'allowed-tools: Bash(python3:*)' in front
-    assert 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/configure.py"' in body
+    assert (
+        'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/configure.py" ' + DIALOG_URL_ARG
+    ) in body
     assert '!`' not in text
 
 
@@ -1364,24 +1452,15 @@ def test_plugin_manifest_matches_settings():
         'Stop',
         'SubagentStop',
     }
-    fields = set(Settings.__dataclass_fields__)
-    # judge options read by verifiers.build_verifier, not by Settings
-    secrets = {
-        'davi_api_key',
-        'runpod_api_key',
-        'choice_endpoint_id',
-        'typesafe_api_key',
-        'anthropic_api_key',
-    }
-    judge_options = {'davi_base_url', 'usd_per_second'}
+    # the settings dialog holds the connection only; the features are set
+    # by /davi-route:setup, the rest with its --set
     config = plugin['userConfig']
-    assert set(config) <= fields | secrets | judge_options
-    assert all(config[key]['sensitive'] for key in secrets)
-    assert not any(config[key].get('sensitive') for key in judge_options)
+    assert tuple(config) == load_launcher().DIALOG_KEYS
+    assert not config['davi_base_url'].get('sensitive')
+    assert all(
+        config[key]['sensitive'] for key in config if key.endswith('_key')
+    )
     defaults = Settings()
-    for key, spec in config.items():
-        if key in fields and 'default' in spec:
-            assert spec['default'] == getattr(defaults, key), key
     for entries in hooks.values():
         for entry in entries:
             (hook,) = entry['hooks']

@@ -332,3 +332,8 @@ def test_options_file_fills_only_unset_options(tmp_path):
     assert merged['DAVI_ROUTE_NOUL_MODE'] == 'choice'
     assert env == {'DAVI_ROUTE_NOUL_MODE': 'choice'}
     assert with_options_file({}, str(tmp_path / 'missing.json')) == {}
+    # the plugin's settings dialog wins over the setup file
+    dialog = {'CLAUDE_PLUGIN_OPTION_DAVI_BASE_URL': 'http://dialog.test'}
+    merged = with_options_file(dialog, str(path))
+    assert 'DAVI_ROUTE_DAVI_BASE_URL' not in merged
+    assert build_client('davi', merged).base_url == 'http://dialog.test'

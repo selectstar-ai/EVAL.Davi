@@ -84,21 +84,30 @@ davi-route verify --judge jev --task "What is 17*23?" --candidate "It is 390."
 ## Claude Code 개입 (A / E / B)
 
 플러그인은 `plugins/davi-route`에 있습니다. `datumo` marketplace에서 `davi-route@datumo`로 설치하거나(CLI, Claude
-앱 모두), 체크아웃에서 `--plugin-dir`로 불러옵니다. 전부 기본 꺼짐이고, 설치 후 아무 Claude Code 세션(CLI, 앱)에서
-아래 명령 한 번으로 켭니다. Davi 서버 주소를 저장하고 `tiers` 모드로 켠 뒤, 서버가 응답하는지 확인합니다.
+앱 모두), 체크아웃에서 `--plugin-dir`로 불러옵니다. 전부 기본 꺼짐입니다. 설정은 두 곳에 나뉩니다.
+
+- **플러그인 설정 창**(`/plugin` → Installed → davi-route → Configure options): 연결 정보만 넣습니다. Davi 서버
+  주소와 필요할 때만 쓰는 키(Davi, TypeSafe, Anthropic)입니다. 키는 키체인에 저장됩니다.
+- **`/davi-route:setup`**: 기능을 켜고 끄고 고릅니다. `on`은 `tiers` 방식, Davi 판정으로 라우팅을 켜고 서버가
+  응답하는지 확인합니다.
 
 ```
-/davi-route:setup http://<Davi 서버>:<포트>
+/davi-route:setup on            # 라우팅 켜기
+/davi-route:setup               # 지금 상태 보기
+/davi-route:setup off           # 라우팅 끄기
+/davi-route:setup stop on       # B 켜기
 ```
 
-`setup`은 스킬이라 말로 요청해도 됩니다("davi-route가 Davi 서버 http://…:20100을 쓰도록 설정해줘"). 실행 승인을 물으면
+`setup`은 스킬이라 말로 요청해도 됩니다("davi-route 라우팅 켜줘"). 실행 승인을 물으면
 `python3 …/configure.py` 실행을 허용하세요. 훅이 도는 곳(Claude Code: 터미널, 데스크톱 앱 Code 탭, 그리고 Cowork)에서만
 동작하며, claude.ai 일반 채팅에서는 훅과 서브에이전트가 돌지 않아 라우팅되지 않습니다. 슬래시 명령(`commands/`의 `!`
 미리 실행)이 아니라 스킬인 이유는 claude.ai에서 동기화된 설치본이 `!` 줄을 실행하지 않기 때문입니다.
 
-claude.ai 플러그인 화면에는 옵션 입력 칸이 없어서, 이 명령이 옵션을 `~/.claude/davi-route.json`에 씁니다. hook이
-호출될 때마다 이 파일을 읽으므로 다음 서브에이전트 호출부터 적용됩니다. 같은 방법으로 바꾸거나 확인합니다
-(`--mode post`, `--judge claude`, `--set log_file=/tmp/route.jsonl`, `--off`, `--show`).
+이 명령은 옵션을 `~/.claude/davi-route.json`에 씁니다. hook이 호출될 때마다 이 파일을 읽으므로 다음 서브에이전트
+호출부터 적용됩니다. 방식과 판정자(`--mode post`, `--judge claude`)와 아래 표의 나머지 값(`--set
+log_file=/tmp/route.jsonl`)도 같은 명령으로 바꿉니다. claude.ai 플러그인 화면에는 설정 창이 없으므로 거기서는 서버
+주소도 이 명령으로 넣습니다(`/davi-route:setup http://<Davi 서버>:<포트> on`). 설정 창에 주소가 있으면 설정 창 값을
+씁니다.
 
 설치본에는 `plugins/davi-route`만 복사되므로 플러그인이 스스로 필요한 것을 갖고 있습니다.
 
@@ -126,19 +135,20 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 1. Claude Code 안에서는 **다음 Agent 호출의 `model`**에 적용합니다 (PreToolUse `updatedInput`, 아래 probe 4로 확인).
 2. 하네스에서는 다음 `claude -p --model <next_model>`에 적용합니다.
 
-설정 우선순위는 `DAVI_ROUTE_<KEY>` 환경변수(Claude Code `settings.json`의 `env` 포함) → `~/.claude/davi-route.json`
-(`/davi-route:setup`이 씀, `DAVI_ROUTE_CONFIG`로 위치 변경) → userConfig(`CLAUDE_PLUGIN_OPTION_<KEY>`)입니다. 하네스 arm은
-환경변수로 설정을 넘깁니다.
+설정 우선순위는 `DAVI_ROUTE_<KEY>` 환경변수(Claude Code `settings.json`의 `env` 포함) → 플러그인 설정 창(연결 정보
+4개만, `CLAUDE_PLUGIN_OPTION_<KEY>`) → `~/.claude/davi-route.json`(`/davi-route:setup`이 씀, `DAVI_ROUTE_CONFIG`로 위치
+변경)입니다. 0.7.0 전 버전이 설정 창에 저장한 다른 값(`route_enabled` 등)은 Claude Code가 계속 넘겨 주지만 launcher가
+버립니다. 하네스 arm은 환경변수로 설정을 넘깁니다.
 
 | 키 | 기본값 | 설명 |
 |---|---|---|
 | `route_enabled` | false | A + E 켜기/끄기 |
-| `route_mode` | post | `post`: cheap 먼저, 답을 판정해 필요하면 strong으로 재실행 / `pre`: 실행 전 과제만 판정해 cheap 또는 strong으로 바로 보냄(재실행 없음, 답을 보지 못함) / `both`: `pre`로 보낸 뒤 cheap으로 간 것만 답을 다시 판정 / `tiers`: 실행 전 난이도로 cheap / mid / strong 중 하나로 보냄 |
+| `route_mode` | tiers | `post`: cheap 먼저, 답을 판정해 필요하면 strong으로 재실행 / `pre`: 실행 전 과제만 판정해 cheap 또는 strong으로 바로 보냄(재실행 없음, 답을 보지 못함) / `both`: `pre`로 보낸 뒤 cheap으로 간 것만 답을 다시 판정 / `tiers`: 실행 전 난이도로 cheap / mid / strong 중 하나로 보냄 |
 | `route_mid_model` | sonnet | (`tiers`) 중간 난이도에 쓸 모델 |
 | `route_tier_low` / `route_tier_high` | 0.48 / 0.78 | (`tiers`) 난이도가 low 미만이면 cheap, high 이상이면 strong, 그 사이는 mid. K-HLE로 정한 값 |
 | `route_tier_check` | false | (`tiers`) cheap 모델로 간 답도 판정해 `route_threshold` 미만이면 strong으로 재실행 |
 | `route_judge` | davi | davi / jev / claude / fake |
-| `davi_base_url` / `davi_api_key` | (없음) | Davi 서버 주소(`POST /v1/systemone`)와 선택 키. Claude 앱에서는 플러그인 옵션 화면에서 입력하고, 넣으면 `DAVI_BASE_URL` / `DAVI_API_KEY` 환경변수보다 우선합니다 |
+| `davi_base_url` / `davi_api_key` | (없음) | Davi 서버 주소(`POST /v1/systemone`)와 선택 키. 플러그인 설정 창에서 입력하고, 넣으면 `DAVI_BASE_URL` / `DAVI_API_KEY` 환경변수보다 우선합니다 |
 | `route_threshold` | 0.5 | (`post`/`both`) 답의 P(accept)가 이 값보다 작으면 escalate |
 | `route_pre_threshold` | 0.5 | (`pre`/`both`) 과제만 본 P(저비용 모델 성공)가 이 값보다 작으면 strong 모델로 바로 보냄 |
 | `route_cheap_model` / `route_strong_model` | haiku / opus | 모델 문자열 |

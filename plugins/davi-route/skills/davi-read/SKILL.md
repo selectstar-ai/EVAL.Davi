@@ -15,9 +15,12 @@ sent outside.
 Run the plugin's command with the Bash tool:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py" "https://docs.python.org/3/library/functools.html" "What happens if lru_cache maxsize is None?"
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py" --file docs/guide.md "How long is the retention period?"
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py" --dialog-url "${user_config.davi_base_url}" "https://docs.python.org/3/library/functools.html" "What happens if lru_cache maxsize is None?"
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py" --dialog-url "${user_config.davi_base_url}" --file docs/guide.md "How long is the retention period?"
 ```
+
+Keep `--dialog-url` and its value first, exactly as written, even when the value looks like a placeholder: it passes on
+the Davi server URL from the plugin's settings.
 
 - Pass the question as the user asked it. Do not add the answer you expect: passages are kept by how well they answer
   the question, so a guess can drop the passages that qualify or contradict it.
@@ -25,14 +28,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/hooks/davi_read.py" --file docs/guide.md "How lon
 - `--json` prints the same result as JSON.
 - The first call may install `httpx` for the plugin (a few seconds, once).
 
-If `${CLAUDE_PLUGIN_ROOT}` was not replaced by a real path in the commands above, find the script first:
+If `${CLAUDE_PLUGIN_ROOT}` was not replaced by a real path in the commands above, find the script first and run it
+without `--dialog-url`:
 
 ```bash
 find ~/.claude/plugins -path '*davi-route*/hooks/davi_read.py' 2>/dev/null | sort | tail -n 1
 ```
 
-If it reports that no Davi server URL is set, ask the user to run `/davi-route:setup` with their Davi server URL. To
-use davi-read without routing, the setup takes `--off` after the URL. Do not ask for keys in chat.
+If it reports that no Davi server URL is set, ask the user to enter it in the plugin's settings (`/plugin` →
+Installed → davi-route → Configure options), or, where there are no plugin settings (claude.ai), to run
+`/davi-route:setup http://<davi-host>:<port>`. davi-read needs no feature turned on. Do not ask for keys in chat.
 
 ## Reading the output
 
