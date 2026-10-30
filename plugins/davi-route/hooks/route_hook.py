@@ -14,11 +14,14 @@ form)::
   marketplace install runs: it copies only ``plugins/davi-route``); the
   ``src`` of the marketplace's copy of the repository.
 - Options: ``DAVI_ROUTE_<KEY>`` environment variables (also from the
-  ``env`` of Claude Code settings), then the JSON file written by
+  ``env`` of Claude Code settings), then the plugin's settings dialog
+  (``CLAUDE_PLUGIN_OPTION_<KEY>``), then the JSON file written by
   ``/davi-route:setup`` (``~/.claude/davi-route.json``, or
-  ``DAVI_ROUTE_CONFIG``), then the plugin options
-  (``CLAUDE_PLUGIN_OPTION_<KEY>``). The file is read on every call and its
-  values are passed on as ``DAVI_ROUTE_<KEY>`` when that variable is unset.
+  ``DAVI_ROUTE_CONFIG``). The dialog holds the connection only
+  (``DIALOG_KEYS``); the features and every other option live in the file.
+  Dialog values for other keys, saved by an older version of the plugin,
+  are dropped. The file is read on every call and its values are passed on
+  as ``DAVI_ROUTE_<KEY>`` when neither of the others is set.
 - Fast path: if the hook's feature is off (``route_enabled`` for pre/post,
   ``stop_verify_enabled`` for stop, either for setup) and probe mode is
   off, it exits 0 before reading stdin or importing anything.
@@ -41,7 +44,15 @@ CONFIG_FILE = 'davi-route.json'
 CONFIG_KEY = re.compile(r'^[a-z][a-z0-9_]*$')
 KINDS = ('pre', 'post', 'stop', 'subagent_stop', 'setup')
 REEXEC_GUARD = '_DAVI_ROUTE_HOOK_REEXEC'
-OPTION_PREFIXES = ('DAVI_ROUTE_', 'CLAUDE_PLUGIN_OPTION_')
+DIALOG_PREFIX = 'CLAUDE_PLUGIN_OPTION_'
+OPTION_PREFIXES = ('DAVI_ROUTE_', DIALOG_PREFIX)
+# plugin.json userConfig: the connection; the rest is set by the setup skill
+DIALOG_KEYS = (
+    'davi_base_url',
+    'davi_api_key',
+    'typesafe_api_key',
+    'anthropic_api_key',
+)
 TRUE_WORDS = ('1', 'true', 'yes', 'on')
 OFF_WORDS = ('', '0', 'false', 'no', 'off')
 VENV_PYTHONS = (('venv', 'bin', 'python'), ('venv', 'Scripts', 'python.exe'))
@@ -78,14 +89,37 @@ def read_config(path):
     return data if isinstance(data, dict) else {}
 
 
+def drop_stale_options():
+    """Forget dialog values for keys the settings dialog no longer has.
+
+    Claude Code keeps exporting options saved by an older version of the
+    plugin (``route_enabled`` and the others before 0.7.0); they would
+    switch features on that the user can no longer see.
+    """
+    kept = {DIALOG_PREFIX + key.upper() for key in DIALOG_KEYS}
+    for name in list(os.environ):
+        if name.startswith(DIALOG_PREFIX) and name not in kept:
+            del os.environ[name]
+
+
+def dialog_value(text):
+    """A ``${user_config.KEY}`` value a skill passed on; None when unset
+    (Claude Code leaves the placeholder in place) or empty."""
+    text = (text or '').strip()
+    if not text or '${' in text:
+        return None
+    return text
+
+
 def load_config_file():
-    """Pass the file's options on as unset ``DAVI_ROUTE_<KEY>`` variables."""
+    """Pass the file's options on as ``DAVI_ROUTE_<KEY>`` variables, for
+    keys set neither by such a variable nor by the settings dialog."""
     for key, value in read_config(config_path()).items():
         if value is None or not CONFIG_KEY.match(str(key)):
             continue
-        name = 'DAVI_ROUTE_' + key.upper()
-        if not os.environ.get(name, '').strip():
-            os.environ[name] = _env_value(value)
+        names = ('DAVI_ROUTE_' + key.upper(), DIALOG_PREFIX + key.upper())
+        if not any(os.environ.get(name, '').strip() for name in names):
+            os.environ[names[0]] = _env_value(value)
 
 
 def _opt(key):
@@ -101,21 +135,24 @@ def _on(key):
     return _opt(key) not in OFF_WORDS
 
 
+def install_allowed():
+    # auto_install_deps defaults to on: only an explicit off disables it
+    return not _opt('auto_install_deps') or _on('auto_install_deps')
+
+
 def feature_on(kind):
     if _opt('probe') in TRUE_WORDS:
         return kind != 'setup'
     if kind == 'setup':
         enabled = _on('route_enabled') or _on('stop_verify_enabled')
-        # auto_install_deps defaults to on: only an explicit off disables it
-        install = not _opt('auto_install_deps') or _on('auto_install_deps')
-        return enabled and install
+        return enabled and install_allowed()
     if kind in ('pre', 'post'):
         return _on('route_enabled')
     return _on('stop_verify_enabled')
 
 
-def _has_routing(src):
-    return os.path.isdir(os.path.join(src, 'judge_adapter', 'routing'))
+def _has_package(src, package):
+    return os.path.isdir(os.path.join(src, 'judge_adapter', package))
 
 
 def _install_location(plugins_dir, name):
@@ -131,7 +168,7 @@ def _install_location(plugins_dir, name):
     return location if isinstance(location, str) else None
 
 
-def _marketplace_src(here):
+def _marketplace_src(here, package):
     """``src`` in the marketplace's copy of the repository.
 
     ``here`` is ``<plugins>/cache/<marketplace>/<plugin>/<version>/hooks``
@@ -152,12 +189,13 @@ def _marketplace_src(here):
         os.path.join(plugins_dir, 'marketplaces', name),
     )
     for root in roots:
-        if root and _has_routing(os.path.join(root, 'src')):
+        if root and _has_package(os.path.join(root, 'src'), package):
             return os.path.join(root, 'src')
     return None
 
 
-def find_src():
+def find_src(package='routing'):
+    """The ``src`` folder whose ``judge_adapter`` has ``package``."""
     configured = os.environ.get('DAVI_ROUTE_SRC', '').strip()
     if configured and os.path.isdir(os.path.join(configured, 'judge_adapter')):
         return configured
@@ -165,13 +203,13 @@ def find_src():
     directory = here
     for _ in range(6):
         candidate = os.path.join(directory, 'src')
-        if _has_routing(candidate):
+        if _has_package(candidate, package):
             return candidate
         directory = os.path.dirname(directory)
     bundled = os.path.join(os.path.dirname(here), 'lib')
-    if _has_routing(bundled):
+    if _has_package(bundled, package):
         return bundled
-    return _marketplace_src(here)
+    return _marketplace_src(here, package)
 
 
 def _venv_python():
@@ -185,13 +223,13 @@ def _venv_python():
     return None
 
 
-def _deps_dir():
+def deps_dir():
     data = os.environ.get('CLAUDE_PLUGIN_DATA')
     return os.path.join(data, DEPS_DIR) if data else None
 
 
-def _add_deps_path():
-    deps = _deps_dir()
+def add_deps_path():
+    deps = deps_dir()
     if deps and os.path.isdir(deps) and deps not in sys.path:
         sys.path.insert(0, deps)
 
@@ -275,7 +313,7 @@ def install_dependency(deps, run=subprocess.run, python=None, now=time.time):
 def setup(kind):
     import importlib.util
 
-    _add_deps_path()
+    add_deps_path()
     if importlib.util.find_spec('httpx') is not None:
         return 0
     python = _venv_python()
@@ -285,7 +323,7 @@ def setup(kind):
         )
         if check.returncode == 0:
             return 0
-    deps = _deps_dir()
+    deps = deps_dir()
     if deps is None:
         _note(kind, 'install_failed', 'CLAUDE_PLUGIN_DATA is not set')
         return 0
@@ -299,7 +337,7 @@ def main(kind):
 
     if kind == 'setup':
         return setup(kind)
-    _add_deps_path()
+    add_deps_path()
     if importlib.util.find_spec('httpx') is None:
         python = _venv_python()
         if python and not os.environ.get(REEXEC_GUARD):
@@ -329,6 +367,7 @@ def main(kind):
 
 if __name__ == '__main__':
     hook_kind = sys.argv[1] if len(sys.argv) > 1 else ''
+    drop_stale_options()
     load_config_file()
     if hook_kind not in KINDS or not feature_on(hook_kind):
         sys.exit(0)

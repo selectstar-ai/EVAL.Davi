@@ -1,7 +1,7 @@
 ---
 name: setup
-description: Configure the davi-route plugin. Use when the user gives a Davi server URL to use for routing, or asks to turn davi-route routing on or off, change its mode or judge, set one of its options, or show its current settings.
-argument-hint: <http://davi-host:port> [--mode tiers|post|pre|both] [--judge davi|jev|claude] [--set KEY=VALUE] [--off] [--show]
+description: Turn davi-route's features on or off and show its settings. Use when the user asks to turn subagent routing or the completion check on or off, change the routing mode or judge, set an advanced davi-route option, see davi-route's current settings, or gives a Davi server URL for routing or davi-read.
+argument-hint: [on|off] [stop on|off] [--mode tiers|post|pre|both] [--judge davi|jev|claude] [http://davi-host:port] [--set KEY=VALUE]
 allowed-tools: Bash(python3:*)
 ---
 
@@ -11,18 +11,24 @@ Run the plugin's configuration script once with the Bash tool. Run no other comm
 your own): the script saves the options, checks the Davi server and prints the result.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/configure.py" <arguments>
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/configure.py" --dialog-url "${user_config.davi_base_url}" <arguments>
 ```
 
-Build `<arguments>` from what the user asked. The text after the command, if any, is: `$ARGUMENTS`
+Keep `--dialog-url` and its value exactly as written, even when the value looks like a placeholder: it passes on the
+URL from the plugin's settings dialog. Build `<arguments>` from what the user asked. The text after the command, if
+any, is: `$ARGUMENTS`
 
-- A Davi server URL: pass it first, as `http://host:port`. Add `http://` if the user left it out.
+- Show the settings: no arguments.
+- Subagent routing: `on` or `off`. `on` uses the tiers mode and the Davi judge unless others were chosen.
+- Completion check at Stop: `stop on` or `stop off`.
 - Routing mode: `--mode tiers`, `--mode post`, `--mode pre` or `--mode both`.
 - Judge: `--judge davi`, `--judge jev` or `--judge claude`.
-- Another option: `--set key=value`, for example `--set log_file=/tmp/route.jsonl`.
-- Turn routing off: `--off`. Show the current settings: `--show`.
+- A Davi server URL, as `http://host:port` (add `http://` if the user left it out). It is used when the settings
+  dialog has none, as on claude.ai.
+- An advanced option: `--set key=value`, for example `--set log_file=/tmp/route.jsonl` or
+  `--set read_allow_hosts=host1,host2` (internal hosts davi-read may read).
 
-If the user asked to set up davi-route but gave no URL, ask for the Davi server URL before you run anything.
+If the user asked to set up davi-route without saying what, run it with no arguments and explain what can be turned on.
 
 If `${CLAUDE_PLUGIN_ROOT}` was not replaced by a real path in the command above, find the script first:
 
@@ -30,13 +36,19 @@ If `${CLAUDE_PLUGIN_ROOT}` was not replaced by a real path in the command above,
 find ~/.claude/plugins -path '*davi-route*/hooks/configure.py' 2>/dev/null | sort | tail -n 1
 ```
 
-Then run that path instead. Do not edit any file yourself: the script writes the options file and prints where.
+Then run that path instead, without `--dialog-url`. Do not edit any file yourself: the script writes the options file
+and prints where.
 
 Afterwards, tell the user in two or three short sentences:
 
-- where the options were saved (the path the script printed);
-- whether the Davi server check passed;
-- that routing applies from the next subagent call, in Claude Code (the CLI or the desktop app's Code tab), not in a
+- what is on and off now, and which Davi server is used (the script prints where the URL came from);
+- whether the Davi server check passed, if it ran;
+- that changes apply from the next subagent call, in Claude Code (the CLI or the desktop app's Code tab), not in a
   regular chat.
 
-Do not repeat the JSON. If the script prints an error or usage text, explain it and give the corrected request.
+If the script says there is no Davi server URL, tell the user to enter it in the plugin's settings (`/plugin` →
+Installed → davi-route → Configure options), or to give it to this command where there are no plugin settings
+(claude.ai). Keys (Davi, TypeSafe, Anthropic) also go in the plugin's settings: never ask for them in chat.
+
+Do not repeat the script's output line by line. If it prints an error or usage text, explain it and give the corrected
+request.

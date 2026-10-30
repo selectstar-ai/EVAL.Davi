@@ -1,7 +1,7 @@
 {
   "name": "davi-route",
-  "version": "0.5.3",
-  "description": "EXPERIMENTAL routing hooks for measuring a verifier inside Claude Code. Pick route_mode: post (cheap subagent first, a verifier checks its result and asks for a strong re-run when needed), pre (a verifier reads the task before the subagent runs and sends it to the cheap or the strong model directly) both (route up front, then verify what went to the cheap model) or tiers (rate difficulty, pick the cheap, mid or strong model). B: at Stop, a verifier checks completion and can block the stop once. All off by default and fail-open. Install as davi-route@datumo, or load with --plugin-dir from an EVAL.Davi checkout.",
+  "version": "0.7.0",
+  "description": "EXPERIMENTAL routing hooks for measuring a verifier inside Claude Code, plus davi-read. Turn features on and off with /davi-route:setup: subagent routing (tiers by default: rate the task's difficulty and send it to the cheap, mid or strong model; or post, pre, both) and a completion check at Stop. The settings dialog holds only the connection: the Davi server URL and keys. All off by default and fail-open. davi-read (skill): the passages of a web page or file that answer a question, verbatim, chosen by Davi. Install as davi-route@datumo, or load with --plugin-dir from an EVAL.Davi checkout.",
   "author": {
     "name": "hundredeuk2",
     "url": "https://github.com/hundredeuk2"
@@ -9,32 +9,38 @@
   "homepage": "https://github.com/selectstar-ai/EVAL.Davi",
   "repository": "https://github.com/selectstar-ai/EVAL.Davi",
   "license": "Apache-2.0",
-  "keywords": ["routing", "verifier", "hooks", "subagent", "experimental"],
+  "keywords": [
+    "routing",
+    "verifier",
+    "hooks",
+    "subagent",
+    "reading",
+    "experimental"
+  ],
   "userConfig": {
-    "route_enabled": {"type": "boolean", "title": "Subagent routing on/off", "description": "Turn subagent routing (A + E) on. How it routes is route_mode.", "default": false},
-    "route_mode": {"type": "string", "title": "Routing mode", "description": "post: cheap first, verify the answer, re-run with the strong model if needed | pre: judge the task before it runs, send it to the cheap or the strong model directly | both: pre, then verify what went to the cheap model | tiers: rate the task's difficulty and send it to the cheap, mid or strong model.", "default": "post"},
-    "route_judge": {"type": "string", "title": "Routing judge", "description": "davi | jev | claude | fake", "default": "davi"},
-    "route_threshold": {"type": "number", "title": "post: escalate below P(accept)", "description": "Pre-fixed experimental value, not calibrated.", "default": 0.5, "min": 0, "max": 1},
-    "route_pre_threshold": {"type": "number", "title": "pre: send to the strong model below P(cheap model succeeds)", "description": "Pre-fixed experimental value, not calibrated.", "default": 0.5, "min": 0, "max": 1},
-    "route_cheap_model": {"type": "string", "title": "Cheap subagent model", "description": "Model string for the first attempt (e.g. haiku).", "default": "haiku"},
-    "route_strong_model": {"type": "string", "title": "Strong subagent model", "description": "Model string after an escalation (e.g. opus).", "default": "opus"},
-    "route_mid_model": {"type": "string", "title": "tiers: mid subagent model", "description": "Model string for medium-difficulty tasks (e.g. sonnet).", "default": "sonnet"},
-    "route_tier_low": {"type": "number", "title": "tiers: cheap model below this difficulty", "description": "Difficulty 0-1 from the judge. Fitted on K-HLE (hard Korean QA); recalibrate for your tasks.", "default": 0.48, "min": 0, "max": 1},
-    "route_tier_high": {"type": "number", "title": "tiers: strong model from this difficulty", "description": "Difficulty 0-1 from the judge. Fitted on K-HLE (hard Korean QA); recalibrate for your tasks.", "default": 0.78, "min": 0, "max": 1},
-    "route_tier_check": {"type": "boolean", "title": "tiers: verify cheap-model answers", "description": "Also verify what went to the cheap model and re-run it with the strong model below route_threshold.", "default": false},
-    "route_pin_cheap": {"type": "string", "title": "Pin the cheap model", "description": "always | if_unset | off: when to set the cheap model on an Agent call without a pending escalation.", "default": "always"},
-    "route_post_mode": {"type": "string", "title": "How an escalation is signalled", "description": "context (additionalContext) | block (decision block + reason).", "default": "context"},
-    "stop_verify_enabled": {"type": "boolean", "title": "B: completion check at Stop", "description": "Verify completion when the agent stops; block once below the threshold.", "default": false},
-    "stop_threshold": {"type": "number", "title": "Block stop below P(complete)", "description": "Pre-fixed experimental value, not calibrated.", "default": 0.5, "min": 0, "max": 1},
-    "stop_max_blocks": {"type": "number", "title": "Max blocked stops per request", "description": "Loop guard (0-5).", "default": 1, "min": 0, "max": 5},
-    "auto_install_deps": {"type": "boolean", "title": "Install httpx if missing", "description": "At session start, when routing or the stop check is on and python3 cannot import httpx, pip-install it into the plugin's data folder (needs network). Off: install httpx yourself.", "default": true},
-    "log_file": {"type": "string", "title": "Log file (JSONL)", "description": "One line per hook call: probabilities, decisions, models, latency, estimated judge cost. No text.", "default": ""},
-    "davi_base_url": {"type": "string", "title": "Davi server URL (davi judge)", "description": "http://host:port of a Davi server (POST /v1/systemone). When set, the davi judge calls it instead of the RunPod endpoint. Overrides the DAVI_BASE_URL environment variable.", "default": ""},
-    "davi_api_key": {"type": "string", "title": "Davi server key (davi judge, optional)", "description": "Bearer key, only if your Davi server requires one.", "sensitive": true},
-    "runpod_api_key": {"type": "string", "title": "RunPod API key (davi judge)", "description": "Key for your choice endpoint.", "sensitive": true},
-    "choice_endpoint_id": {"type": "string", "title": "Choice endpoint ID (davi judge)", "description": "RunPod serverless endpoint ID.", "sensitive": true},
-    "usd_per_second": {"type": "number", "title": "Endpoint price USD/s (davi judge)", "description": "Required for the davi judge.", "min": 0},
-    "typesafe_api_key": {"type": "string", "title": "TypeSafe API key (jev judge)", "description": "Bearer key for api.typesafe.ai.", "sensitive": true},
-    "anthropic_api_key": {"type": "string", "title": "Anthropic API key (claude judge)", "description": "Used only by the claude judge.", "sensitive": true}
+    "davi_base_url": {
+      "type": "string",
+      "title": "Davi server URL",
+      "description": "http://host:port of your Davi server, used by routing, the completion check and davi-read. Turn the features on with /davi-route:setup.",
+      "default": ""
+    },
+    "davi_api_key": {
+      "type": "string",
+      "title": "Davi server key (optional)",
+      "description": "Only if your Davi server requires a bearer key. Used by the hooks; davi-read reads DAVI_API_KEY instead.",
+      "sensitive": true
+    },
+    "typesafe_api_key": {
+      "type": "string",
+      "title": "TypeSafe API key (jev judge, optional)",
+      "description": "Only for /davi-route:setup --judge jev.",
+      "sensitive": true
+    },
+    "anthropic_api_key": {
+      "type": "string",
+      "title": "Anthropic API key (claude judge, optional)",
+      "description": "Only for /davi-route:setup --judge claude.",
+      "sensitive": true
+    }
   }
 }

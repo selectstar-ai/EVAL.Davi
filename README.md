@@ -156,18 +156,28 @@ claude plugin marketplace add selectstar-ai/EVAL.Davi
 claude plugin install davi-route@datumo
 ```
 
-Then, in Claude Code (the terminal or the desktop app's **Code tab**), point it at your Davi server. This turns
-routing on (`tiers` mode) and checks that the server answers:
+Settings live in two places:
+
+- **The plugin's settings dialog** holds the connection: the Davi server URL and the optional keys. Claude Code asks
+  for them when you enable the plugin; change them later in `/plugin` → Installed → davi-route → **Configure
+  options**. Keys are kept in the system keychain.
+- **`/davi-route:setup`** turns the features on and off. In Claude Code (the terminal or the desktop app's **Code
+  tab**):
 
 ```
-/davi-route:setup http://<your-davi-host>:<port> --set log_file=/tmp/route.jsonl
+/davi-route:setup on          # subagent routing on (tiers mode, Davi judge); checks the server
+/davi-route:setup             # show what is on and which server is used
+/davi-route:setup off         # routing off
+/davi-route:setup stop on     # completion check at Stop (experimental)
 ```
 
-`setup` is a skill, so asking in words also works ("use the Davi server at http://host:port for davi-route");
-approve the `python3 .../configure.py` run when asked. Inspect or turn off routing the same way (`--show`, `--off`).
+`setup` is a skill, so asking in words also works ("turn davi-route routing on"); approve the
+`python3 .../configure.py` run when asked. On claude.ai, whose plugin page has no settings dialog, give the URL to
+the same command: `/davi-route:setup http://<your-davi-host>:<port> on`.
 
-Then ask for work that uses subagents ("Use the Agent tool to ..."). Each `Agent` call gets a model, and each hook
-call writes one JSON line (level, tier, model, latency; never the task text):
+Then ask for work that uses subagents ("Use the Agent tool to ..."). Each `Agent` call gets a model. To log each
+hook call as one JSON line (level, tier, model, latency; never the task text), set
+`/davi-route:setup --set log_file=/tmp/route.jsonl`, then:
 
 ```bash
 davi-route hooklog /tmp/route.jsonl
@@ -182,18 +192,19 @@ Davi is our own model. If you do not have a Davi server, the same 3-tier routing
 answers the same five-level question through `https://api.typesafe.ai/v1/systemone`. In our experiment Jev's routing
 was second to Davi's (69.4% vs 71.1%) at a lower model-run cost.
 
-1. Get an API key from [TypeSafe](https://docs.typesafe.ai/introduction) and export it before you start Claude Code,
-   so the key never goes through the chat:
+1. Get an API key from [TypeSafe](https://docs.typesafe.ai/introduction) and enter it in the plugin's settings
+   dialog (**TypeSafe API key**), so the key never goes through the chat. Exporting it before you start Claude Code
+   also works:
 
    ```bash
    export JEV_API_KEY=<your-typesafe-key>     # TYPESAFE_API_KEY also works
    claude
    ```
 
-2. Turn routing on with Jev. Without a Davi URL, `setup` does not switch routing on by itself, so set it explicitly:
+2. Turn routing on with Jev:
 
    ```
-   /davi-route:setup --judge jev --mode tiers --set route_enabled=true --set log_file=/tmp/route.jsonl
+   /davi-route:setup on --judge jev
    ```
 
    Or, without the skill:
@@ -215,9 +226,8 @@ Jev with [Measure your own workload](#measure-your-own-workload) and set `route_
 
 ### Without the setup skill
 
-The claude.ai plugin page has no fields for plugin options, so the skill writes them to `~/.claude/davi-route.json`
-instead; the hooks read that file on every call. The same options also work as environment variables (shell or
-`settings.json` `env`):
+`setup` writes `~/.claude/davi-route.json`; the hooks read that file on every call. The same options also work as
+environment variables (shell or `settings.json` `env`):
 
 ```bash
 export DAVI_ROUTE_DAVI_BASE_URL=http://<your-davi-host>:<port>   # POST /v1/systemone
@@ -227,8 +237,10 @@ export DAVI_ROUTE_LOG_FILE=$PWD/route.jsonl
 claude --plugin-dir plugins/davi-route
 ```
 
-Option precedence: `DAVI_ROUTE_<KEY>` environment variables, then `~/.claude/davi-route.json` (`DAVI_ROUTE_CONFIG`
-moves it), then the plugin options (`claude plugin configure`, read as `CLAUDE_PLUGIN_OPTION_<KEY>`).
+Option precedence: `DAVI_ROUTE_<KEY>` environment variables, then the settings dialog (connection only, read as
+`CLAUDE_PLUGIN_OPTION_<KEY>`), then `~/.claude/davi-route.json` (`DAVI_ROUTE_CONFIG` moves it). Options that plugin
+versions before 0.7.0 kept in the settings dialog (`route_enabled` and the others) are ignored there now: set them
+with `setup`.
 
 ### Dependencies
 
@@ -249,19 +261,36 @@ After changing anything under `src/judge_adapter`, run `davi-route bundle` (a te
 
 ### Configuration
 
+**Features** (`/davi-route:setup`):
+
+| Command | Key | Default | Purpose |
+| --- | --- | --- | --- |
+| `on` / `off` | `route_enabled` | off | Subagent routing |
+| `stop on` / `stop off` | `stop_verify_enabled` | off | Completion check at Stop ([Planned features](#planned-features)) |
+| `--mode` | `route_mode` | `tiers` | `tiers` (3 models by difficulty); other modes: [Planned features](#planned-features) |
+| `--judge` | `route_judge` | `davi` | `davi`, `jev`, `claude`, `fake` |
+
+**Connection** (the plugin's settings dialog):
+
+| Field | Key | Purpose |
+| --- | --- | --- |
+| Davi server URL | `davi_base_url` | Davi server (`POST /v1/systemone`), for routing and davi-read; overrides `DAVI_BASE_URL` |
+| Davi server key | `davi_api_key` | Only if the server requires one; overrides `DAVI_API_KEY` (davi-read reads `DAVI_API_KEY`) |
+| TypeSafe API key | `typesafe_api_key` | Jev judge; `JEV_API_KEY` or `TYPESAFE_API_KEY` in the environment also works |
+| Anthropic API key | `anthropic_api_key` | Claude judge; `ANTHROPIC_API_KEY` also works |
+
+**Advanced** (`/davi-route:setup --set KEY=VALUE`; the defaults suit most uses):
+
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `route_enabled` | `false` | Turn subagent routing on |
-| `route_mode` | `post` | Use `tiers` (3 models by difficulty); `setup` with a Davi URL sets it. Other modes: [Planned features](#planned-features) |
-| `route_judge` | `davi` | `davi`, `jev`, `claude`, `fake` |
-| `davi_base_url` / `davi_api_key` | (unset) | Davi server (`POST /v1/systemone`) and its optional key; override the `DAVI_BASE_URL` / `DAVI_API_KEY` environment variables |
-| `typesafe_api_key` | (unset) | Jev key; `JEV_API_KEY` or `TYPESAFE_API_KEY` in the environment also works |
 | `route_cheap_model` / `route_mid_model` / `route_strong_model` | `haiku` / `sonnet` / `opus` | Model strings |
 | `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | Difficulty cut-offs (fitted on K-HLE with Davi) |
 | `route_agent_types` | (all) | Comma-separated `subagent_type` filter |
 | `on_error` | `accept` | On a judge failure: `accept` (cheap model, fail-open) or `escalate` |
 | `wall_budget_seconds` | `25` | Time limit per hook call; past it nothing changes |
 | `log_file` | (none) | JSONL log of every hook call |
+| `auto_install_deps` | `true` | Install httpx into the plugin's data folder when missing |
+| `read_allow_hosts` | (none) | davi-read: comma-separated internal hosts it may read |
 
 Every option, its effect and the judge prompts: [docs/routing.md](docs/routing.md).
 
@@ -311,9 +340,14 @@ A task line has `id`, `prompt` and either `answer` + `grader` (`contains`, `exac
   - `harness.py` — Tasks, arms, `RunCache`, `claude -p` runs, judging, regrading
   - `analysis.py` — `ReplayRow`, baselines, sweeps, frozen thresholds, demo tables
   - `cli.py`, `probe.py` — The `davi-route` command and the hook mechanism probes
+- `src/judge_adapter/decision/` — Decision core: `ChoiceQuestion` / `NoulQuestion` and the `/v1/systemone`
+  clients (`DaviClient`, `JevClient`) with strict reading and five error codes
+- `src/judge_adapter/reading/` — `davi-read`: blocks, fetching limits, two-pass judging, choosing, the command
+- `plugins/davi-route/skills/davi-read/`, `plugins/davi-route/hooks/davi_read.py` — The `davi-read` skill and the
+  plugin's launcher for it
 - `examples/routing/` — Example task and arm files
 - `docs/` — Routing details (Korean), legacy plugin and reference docs
-- `tests/test_routing.py` — Routing tests
+- `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py` — Tests
 
 ```bash
 ruff check && ruff format --check
@@ -347,8 +381,57 @@ no published results yet, and may change.
 | `route_pin_cheap` | `always` | `post`: when to set the cheap model on an `Agent` call |
 | `stop_verify_enabled` | `false` | Completion check at Stop (blocks at most `stop_max_blocks` times) |
 
-Turn one on with `setup`, for example `/davi-route:setup --mode post` or `--set stop_verify_enabled=true`. To measure
-the answer-checking modes offline, judge the cheap answers with `davi-route judge ... --kind answer`.
+Turn one on with `setup`, for example `/davi-route:setup --mode post` or `/davi-route:setup stop on`. To measure the
+answer-checking modes offline, judge the cheap answers with `davi-route judge ... --kind answer`.
+
+## Experimental: read a page with `davi-read`
+
+`davi-read` prints the parts of a web page (or a local HTML, Markdown or text file) that answer a question, copied
+verbatim with their heading path. An agent can call it instead of WebFetch, which returns a paraphrase. It is a new
+feature with no measured results yet: it is not shown to improve answers, only to return the source text.
+
+It comes with the `davi-route` plugin: install the plugin, enter your Davi server URL in its settings dialog, and
+Claude Code uses the `davi-read` skill for pages where it needs a specific fact. Nothing has to be turned on, and
+httpx is installed for the plugin at the first call. Where there is no settings dialog (claude.ai), give the URL to
+`setup` instead:
+
+```text
+/plugin install davi-route@datumo
+/davi-route:setup http://<davi-host>:<port>     # only where the plugin has no settings dialog
+```
+
+From a checkout, the same command runs in a terminal:
+
+```bash
+pip install -e .            # provides the davi-read command
+davi-read https://docs.python.org/3/library/functools.html "What happens if lru_cache maxsize is None?"
+davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
+```
+
+- **How (the same method as [jevfetch](https://github.com/a2sys-ai/jevfetch), our own code):** the page is split
+  into blocks (paragraphs, list items, code, table rows; documentation notes kept; a sentence ending in ":" joined
+  with its list). The judge rates every block in windows of about 3,000 tokens (one request per window, one `noul`
+  question per block); each window's likely blocks are rated again alone with their neighbouring text. Kept: blocks
+  at or above the keep threshold, neighbours under the same heading that pass on their own score, the first block,
+  and the header rows of kept table rows. Pages up to about 2,000 tokens are returned whole. With the judge fixed,
+  the judge model is the only difference from jevfetch.
+- **Judge:** Davi by default, read from the same options as the routing hooks (the settings dialog, `DAVI_BASE_URL`,
+  `/davi-route:setup`).
+  Because Davi runs on your own server, internal pages stay in house. `--judge jev` uses TypeSafe Jev instead and
+  sends the page text to its API.
+- **Fail-open:** a failed judge request is tried again (up to 3 times); a part of the page that still cannot be
+  judged is included unjudged, and only when the whole judge fails is the page printed unjudged (`judge_failed`).
+- **Limits:** hosts that resolve to private addresses are refused unless allowed (`--allow-host`, or the
+  `read_allow_hosts` option for an intranet); pages over 5 MB are refused. A PDF or other file is saved and its path
+  printed (`# saved:`) for the agent's file reader. A page whose static HTML has almost no text is re-read with
+  headless Chrome when it is installed (`--no-render` to skip). The thresholds (0.6 / 0.8 / 0.6) are jevfetch's,
+  not fitted to Davi.
+- **Agent setup:** the plugin's [davi-read skill](plugins/davi-route/skills/davi-read/SKILL.md) tells Claude when to
+  use it and how to read the result; it runs the plugin's own copy of the code (`plugins/davi-route/lib`).
+
+On the Python `functools` page (2026-10-27, Davi, one run each), it kept 6 of 143 blocks (1,327 of 32,464
+characters) in English and 7 of 143 (1,410 of 27,358) in Korean, both including the sentence that answers the
+question, in about 6 seconds.
 
 ## Legacy: the `davi` search-result filter
 
