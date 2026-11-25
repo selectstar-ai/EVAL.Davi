@@ -31,7 +31,7 @@ davi-decision-mcp --help
 | 판정자 | `--judge davi\|jev` | `decision_judge` | `davi` |
 | Davi 주소 | | `DAVI_BASE_URL` (또는 `DAVI_ROUTE_DAVI_BASE_URL`) | 없음(필수) |
 | Davi 키 | | `DAVI_API_KEY` | 없음(키 없는 서버면 생략) |
-| Davi 모델 | | `davi_model` | `davi` |
+| Davi 모델 | | `davi_model` | `davi-mini` (davi-route 0.7.1부터, 그 전에는 `davi`) |
 | Jev 키 | | `TYPESAFE_API_KEY` 또는 `JEV_API_KEY` | 없음(필수) |
 | Jev 모델·주소 | | `jev_model`, `jev_base_url` | `jev-latest`, `https://api.typesafe.ai` |
 | timeout(초) | `--timeout` | `decision_timeout_seconds` | `60` |
@@ -118,7 +118,7 @@ them. Command arguments come first, then `DAVI_ROUTE_<KEY>`, `CLAUDE_PLUGIN_OPTI
 | Judge | `--judge davi\|jev` | `decision_judge` | `davi` |
 | Davi URL | | `DAVI_BASE_URL` (or `DAVI_ROUTE_DAVI_BASE_URL`) | none (required) |
 | Davi key | | `DAVI_API_KEY` | none (omit for a keyless server) |
-| Davi model | | `davi_model` | `davi` |
+| Davi model | | `davi_model` | `davi-mini` (from davi-route 0.7.1; `davi` before) |
 | Jev key | | `TYPESAFE_API_KEY` or `JEV_API_KEY` | none (required) |
 | Jev model, URL | | `jev_model`, `jev_base_url` | `jev-latest`, `https://api.typesafe.ai` |
 | Timeout (s) | `--timeout` | `decision_timeout_seconds` | `60` |
