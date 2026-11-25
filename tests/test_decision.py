@@ -247,6 +247,26 @@ def test_failures_map_to_error_codes_without_retries(reply, code):
         davi(server).decide('state', CHOICE)
     assert caught.value.code == code
     assert len(server.requests) == 1
+    # the status of a reply refused as a whole; None without a reply or
+    # for a JSON object whose answers are unreadable
+    status = None
+    if isinstance(reply, tuple):
+        status, body = reply
+        if status == 200 and isinstance(body, dict):
+            status = None
+    assert caught.value.status == status
+
+
+def test_send_checks_the_reply_but_leaves_the_answers_unread():
+    answers = {'q': {'probabilities': {'a': 0.7}}}
+    server = Server(ok(answers), ok(answers))
+    data = davi(server).send('state', {'q': CHOICE})
+    assert data['answers'] == answers
+    assert server.body(0) == davi(server).body('state', {'q': CHOICE})
+    with pytest.raises(DecisionError) as caught:
+        davi(server).ask('state', {'q': CHOICE})
+    assert caught.value.code == 'format_error'
+    assert caught.value.status is None
 
 
 def test_server_error_names_only_the_exception_class():
