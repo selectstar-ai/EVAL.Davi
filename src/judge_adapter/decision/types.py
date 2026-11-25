@@ -12,8 +12,10 @@ back, so the client never branches on the question type:
                           'native': the server's ``noul`` type)
 
 Reading is strict: probabilities must be finite numbers in [0, 1] (not
-bools), cover exactly the asked options and sum to 1 within ``SUM_TOLERANCE``.
-Nothing is renormalised or filled in; a bad answer is a ``format_error``.
+bools), cover exactly the asked options and sum to 1 within ``SUM_TOLERANCE``
+plus ``ROUNDING`` per option (a server may round each probability to two
+decimals). Nothing is renormalised or filled in; a bad answer is a
+``format_error``.
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ ERROR_CODES = (
 )
 NOUL_MODES = ('choice', 'native')
 SUM_TOLERANCE = 1e-6
+# Half a unit of the second decimal: the hosted Davi server rounds each
+# probability to two decimals, so n options can sum to 1 +/- n * 0.005.
+ROUNDING = 0.005
 NOUL_KEYS = ('true', 'false')
 
 
@@ -86,7 +91,8 @@ def _distribution(raw, keys, what):
     if set(raw) != set(keys):
         raise _bad_format(f'{what} probabilities do not match the options')
     shares = {key: _probability(raw[key], what) for key in keys}
-    if abs(sum(shares.values()) - 1.0) > SUM_TOLERANCE:
+    slack = SUM_TOLERANCE + ROUNDING * len(keys)
+    if abs(sum(shares.values()) - 1.0) > slack:
         raise _bad_format(f'{what} probabilities do not sum to 1')
     return shares
 

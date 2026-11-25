@@ -29,7 +29,7 @@ main agent ── Agent tool call (prompt, model?) ──▶ PreToolUse hook (da
                                     model answering from memory?"  levels 1-5
                                                      │  expected level, 0-1
                          ┌───────────────────────────┼───────────────────────────┐
-                    level < 0.48               0.48 ≤ level < 0.78           level ≥ 0.78
+                    level < 0.11               0.11 ≤ level < 0.65           level ≥ 0.65
                          ▼                           ▼                           ▼
                    model = haiku               model = sonnet              model = opus
                          └──────────── updatedInput.model ──▶ subagent runs ─────┘
@@ -42,9 +42,14 @@ judge too slow (wall_budget_seconds) ──▶ the call is left as it was
 
 | 기대 난이도 | 모델 | 전형적인 작업 |
 | --- | --- | --- |
-| `0.48` 미만 | haiku | 작은 모델이 기억만으로 답할 수 있음 |
-| `0.48` ~ `0.78` | sonnet | 더 많은 지식이나 추론이 필요함 |
-| `0.78` 이상 | opus | 강한 모델이 아니면 어려움 |
+| `0.11` 미만 | haiku | 작은 모델이 기억만으로 답할 수 있음 |
+| `0.11` ~ `0.65` | sonnet | 더 많은 지식이나 추론이 필요함 |
+| `0.65` 이상 | opus | 강한 모델이 아니면 어려움 |
+
+기준값은 판정 모델에 맞춰 정합니다. 기본값은 기본 `davi_model`인 `davi-mini`에 맞춘 값입니다. 아래 결과는 이전
+Davi 모델과 기준값 `0.48` / `0.78`로 잰 것입니다. 같은 K-HLE 문항으로 다시 잰 결과(2026-11-25), davi-mini는
+반으로 나눠 기준값을 고르고 다른 쪽에서 잰 정답률이 66.9~69.4%였고 비용은 opus의 약 70%였습니다. 같은 실행에서
+sonnet만은 66.1%, opus만은 71.2%였습니다.
 
 ## 왜 답이 아니라 작업을 판정하나요?
 
@@ -122,8 +127,8 @@ Jev 14개, Claude 40개였습니다.
 
 - **데이터셋 하나.** 언어 하나, 작업 유형 하나(closed-book QA)입니다. 코딩이나 긴 에이전트 작업은 측정하지
   않았습니다.
-- **맞춘 기준값.** 기본값(`0.48` / `0.78`)은 원래 어렵게 만든 K-HLE에서 정했습니다. 자기 작업에 맞게 다시 맞추세요.
-  공정한 비교는 반으로 나눈 수치입니다.
+- **맞춘 기준값.** 기본값(`0.11` / `0.65`)은 원래 어렵게 만든 K-HLE에서 davi-mini로, 채점과 같은 데이터로
+  정했습니다. 자기 작업과 판정 모델에 맞게 다시 맞추세요. 공정한 비교는 반으로 나눈 수치입니다.
 - **비용은 추정치.** Claude Code `total_cost_usd`의 정가 기준 모델 실행 추정치이며 청구액이 아닙니다. **판정 호출은
   포함하지 않았습니다.** Davi 가격은 정해지지 않았고, Jev의 $0.042/MTok은 가정입니다.
 
@@ -212,7 +217,7 @@ Davi는 우리 회사 모델입니다. Davi 서버가 없다면 같은 3단 라�
    davi-route verify --judge jev --kind tier --task "What is 17*23?" --candidate ""
    ```
 
-기본 기준값(`0.48` / `0.78`)은 Davi에 맞춘 값입니다. Jev는 단계 분포가 다르므로
+기본 기준값(`0.11` / `0.65`)은 davi-mini에 맞춘 값입니다. Jev는 단계 분포가 다르므로
 [자기 작업으로 측정하기](#자기-작업으로-측정하기)로 Jev에 맞게 다시 정하고 `route_tier_low` / `route_tier_high`를
 설정하세요.
 
@@ -275,7 +280,8 @@ claude --plugin-dir plugins/davi-route
 | 키 | 기본값 | 용도 |
 | --- | --- | --- |
 | `route_cheap_model` / `route_mid_model` / `route_strong_model` | `haiku` / `sonnet` / `opus` | 모델 문자열 |
-| `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | 난이도 기준값 (K-HLE에서 Davi로 맞춤) |
+| `route_tier_low` / `route_tier_high` | `0.11` / `0.65` | 난이도 기준값 (K-HLE에서 davi-mini로 맞춤) |
+| `davi_model` | `davi-mini` | 서버에 보낼 Davi 모델 이름(`davi-mini`, `davi-0.2.0`). 바꾸면 기준값도 다시 맞추세요 |
 | `route_agent_types` | (전체) | 쉼표로 구분한 `subagent_type` 필터 |
 | `on_error` | `accept` | 판정 실패 시: `accept`(저비용 모델, fail-open) 또는 `escalate` |
 | `wall_budget_seconds` | `25` | hook 호출당 시간 제한. 넘으면 아무것도 바꾸지 않음 |

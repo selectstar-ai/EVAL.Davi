@@ -81,8 +81,8 @@ class TierPolicy:
     cheap model, or to the strong one when ``on_error`` is 'escalate'.
     """
 
-    low: float = 0.48
-    high: float = 0.78
+    low: float = 0.11
+    high: float = 0.65
     cheap_model: str = 'haiku'
     mid_model: str = 'sonnet'
     strong_model: str = 'opus'

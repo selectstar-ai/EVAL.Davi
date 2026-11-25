@@ -30,7 +30,7 @@ main agent ── Agent tool call (prompt, model?) ──▶ PreToolUse hook (da
                                     model answering from memory?"  levels 1-5
                                                      │  expected level, 0-1
                          ┌───────────────────────────┼───────────────────────────┐
-                    level < 0.48               0.48 ≤ level < 0.78           level ≥ 0.78
+                    level < 0.11               0.11 ≤ level < 0.65           level ≥ 0.65
                          ▼                           ▼                           ▼
                    model = haiku               model = sonnet              model = opus
                          └──────────── updatedInput.model ──▶ subagent runs ─────┘
@@ -44,9 +44,14 @@ with two cut-offs:
 
 | Expected level | Model | Typical task |
 | --- | --- | --- |
-| below `0.48` | haiku | A small model should answer it from memory |
-| `0.48` to `0.78` | sonnet | Needs more knowledge or reasoning |
-| `0.78` and above | opus | Hard for anything but the strong model |
+| below `0.11` | haiku | A small model should answer it from memory |
+| `0.11` to `0.65` | sonnet | Needs more knowledge or reasoning |
+| `0.65` and above | opus | Hard for anything but the strong model |
+
+The cut-offs are fitted for the judge model. The defaults suit `davi-mini`, the default `davi_model`; the results
+below were measured with an earlier Davi model and cut-offs `0.48` / `0.78`. In a re-run on the same K-HLE set
+(2026-11-25), davi-mini with cut-offs fitted on one half and scored on the other reached 66.9–69.4% at about 70% of
+opus's cost, against 66.1% for sonnet only and 71.2% for opus only.
 
 ## Why judge the task instead of the answer?
 
@@ -127,8 +132,9 @@ estimate.
 ### Limits
 
 - **One dataset.** One language, one task type (closed-book QA). Coding or long agentic tasks were not measured.
-- **Fitted cut-offs.** The defaults (`0.48` / `0.78`) come from K-HLE, which is hard by design. Recalibrate for your
-  own workload; the split-half figures are the fairer comparison.
+- **Fitted cut-offs.** The defaults (`0.11` / `0.65`) were fitted for davi-mini on K-HLE, which is hard by design,
+  on the same data they are scored on. Recalibrate for your own workload and judge model; the split-half figures are
+  the fairer comparison.
 - **Costs are estimates.** They are Claude Code `total_cost_usd` list-price estimates of the model runs, not bills.
   **Judge calls are not included**: Davi's price is not set, and Jev's $0.042/MTok is an assumption.
 
@@ -221,7 +227,7 @@ was second to Davi's (69.4% vs 71.1%) at a lower model-run cost.
    davi-route verify --judge jev --kind tier --task "What is 17*23?" --candidate ""
    ```
 
-The default cut-offs (`0.48` / `0.78`) were fitted for Davi. Jev's levels fall differently, so recalibrate them for
+The default cut-offs (`0.11` / `0.65`) were fitted for davi-mini. Jev's levels fall differently, so recalibrate them for
 Jev with [Measure your own workload](#measure-your-own-workload) and set `route_tier_low` / `route_tier_high`.
 
 ### Without the setup skill
@@ -284,7 +290,8 @@ After changing anything under `src/judge_adapter`, run `davi-route bundle` (a te
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `route_cheap_model` / `route_mid_model` / `route_strong_model` | `haiku` / `sonnet` / `opus` | Model strings |
-| `route_tier_low` / `route_tier_high` | `0.48` / `0.78` | Difficulty cut-offs (fitted on K-HLE with Davi) |
+| `route_tier_low` / `route_tier_high` | `0.11` / `0.65` | Difficulty cut-offs (fitted on K-HLE with davi-mini) |
+| `davi_model` | `davi-mini` | Davi model name sent to the server (`davi-mini`, `davi-0.2.0`); refit the cut-offs when you change it |
 | `route_agent_types` | (all) | Comma-separated `subagent_type` filter |
 | `on_error` | `accept` | On a judge failure: `accept` (cheap model, fail-open) or `escalate` |
 | `wall_budget_seconds` | `25` | Time limit per hook call; past it nothing changes |

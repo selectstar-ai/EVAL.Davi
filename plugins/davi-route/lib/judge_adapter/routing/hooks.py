@@ -72,9 +72,10 @@ class Settings:
     route_cheap_model: str = 'haiku'
     route_strong_model: str = 'opus'
     route_mid_model: str = 'sonnet'
-    # K-HLE-fitted (haiku / sonnet / opus 5.5); recalibrate per workload
-    route_tier_low: float = 0.48
-    route_tier_high: float = 0.78
+    # Fitted for davi-mini on K-HLE (haiku / sonnet / opus 5.5);
+    # recalibrate per judge model and workload
+    route_tier_low: float = 0.11
+    route_tier_high: float = 0.65
     route_tier_check: bool = False
     route_pin_cheap: str = 'always'
     route_post_mode: str = 'context'
@@ -119,8 +120,8 @@ class Settings:
             route_cheap_model=opt(env, 'route_cheap_model', 'haiku'),
             route_strong_model=opt(env, 'route_strong_model', 'opus'),
             route_mid_model=opt(env, 'route_mid_model', 'sonnet'),
-            route_tier_low=_unit(env, 'route_tier_low', 0.48),
-            route_tier_high=_unit(env, 'route_tier_high', 0.78),
+            route_tier_low=_unit(env, 'route_tier_low', 0.11),
+            route_tier_high=_unit(env, 'route_tier_high', 0.65),
             route_tier_check=opt_flag(env, 'route_tier_check', False),
             route_pin_cheap=opt_choice(
                 env, 'route_pin_cheap', 'always', PIN_MODES
