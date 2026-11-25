@@ -11,9 +11,10 @@ Class hierarchy (abstraction -> inheritance -> polymorphism):
     ├── DaviRunPodVerifier      the RunPod choice endpoint (binary kinds)
     └── HttpVerifier (abstract) lazy HTTP client, key scrubbing, pricing
         ├── ClaudeVerifier      Anthropic Messages, a verbalized 0-100
-        └── SystemOneVerifier   ``POST /v1/systemone``, real probabilities
-            ├── JevVerifier     TypeSafe Jev (Bearer key)
-            └── DaviVerifier    Davi at ``DAVI_BASE_URL`` (key optional)
+        └── SystemOneVerifier   ``POST /v1/systemone``, real probabilities,
+            │                   sent through the decision core's client
+            ├── JevVerifier     TypeSafe Jev (``JevClient``, Bearer key)
+            └── DaviVerifier    Davi at ``DAVI_BASE_URL`` (``DaviClient``)
 
 Callers only use ``verify`` and ``close``. No verifier raises: a failure is
 a Verdict with ``p_accept=None`` and ``outcome`` naming the reason. Keys are
@@ -31,6 +32,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from ..decision import ChoiceQuestion, DaviClient, DecisionError, JevClient
 from ..keys import CredentialMissing, Scrubber
 from .config import (
     ENDPOINT_ENVS,
@@ -439,9 +441,16 @@ class HttpVerifier(Verifier):
 
 class SystemOneVerifier(HttpVerifier):
     """A judge behind ``POST /v1/systemone``: choice questions answered with
-    real probabilities (Jev and Davi share this request shape)."""
+    real probabilities (Jev and Davi share this request shape).
 
-    path = '/v1/systemone'
+    The decision core's client (``client_class``) builds, validates and
+    sends the request: the lazy key, the headers, retries 0, no redirects
+    and the HTTP status rules are shared with it. The routing questions
+    and their reading (the accept share, the ``pre`` ensemble, the tier
+    level) stay here and accept what they accepted before.
+    """
+
+    client_class = DaviClient  # the key is optional, as before
 
     def __init__(
         self,
@@ -455,19 +464,23 @@ class SystemOneVerifier(HttpVerifier):
         super().__init__(key_provider, base_url, **kwargs)
         self._model = model
         self._pre_ensemble = pre_ensemble
+        self._decision = self.client_class(
+            base_url=self.base_url,
+            key_provider=key_provider,
+            model=model,
+            transport=self._transport,
+            timeout=self._timeout,
+        )
+        # one scrubber: the decision client sets the key on it when read
+        self._scrubber = self._decision.scrubber
 
     @property
     def model(self):
         return self._model
 
     def _headers(self, key):
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-        }
-        if key:  # a self-served endpoint may need no key
-            headers['Authorization'] = f'Bearer {key}'
-        return headers
+        """Not used: the decision client sets the request headers."""
+        raise NotImplementedError('the decision client sends the request')
 
     def _uses_ensemble(self, kind):
         return kind == 'pre' and self._pre_ensemble
@@ -475,20 +488,12 @@ class SystemOneVerifier(HttpVerifier):
     def body(self, task, candidate, rubric, kind):
         """The request body for one judgment."""
         state = state_of(task, candidate, rubric, self.max_chars)
-        return {
-            'state': state,
-            'model': self._model,
-            'questions': self._questions(kind),
-        }
+        return self._decision.body(state, self._questions(kind))
 
     def _questions(self, kind):
         if self._uses_ensemble(kind):
             return {
-                f'{QUESTION_ID}_{name}': {
-                    'type': 'choice',
-                    'instructions': instructions,
-                    'criteria': criteria,
-                }
+                f'{QUESTION_ID}_{name}': ChoiceQuestion(instructions, criteria)
                 for name, (instructions, criteria, _) in PRE_ENSEMBLE.items()
             }
         question = KINDS[kind]
@@ -500,18 +505,15 @@ class SystemOneVerifier(HttpVerifier):
                 'escalate': question['escalate'],
             }
         return {
-            QUESTION_ID: {
-                'type': 'choice',
-                'instructions': question['instructions'],
-                'criteria': criteria,
-            }
+            QUESTION_ID: ChoiceQuestion(question['instructions'], criteria)
         }
 
     def _verify(self, task, candidate, rubric, kind, started):
-        body = self.body(task, candidate, rubric, kind)
-        status, data, text = self._post(self.path, body)
-        if status != 200 or not isinstance(data, dict):
-            return self._http_failure(kind, started, status, text)
+        state = state_of(task, candidate, rubric, self.max_chars)
+        try:
+            data = self._decision.send(state, self._questions(kind))
+        except DecisionError as error:
+            return self._decision_failure(kind, started, error)
         usage = (
             data.get('usage') if isinstance(data.get('usage'), dict) else None
         )
@@ -529,6 +531,24 @@ class SystemOneVerifier(HttpVerifier):
             reading['detail'],
             level=reading['level'],
         )
+
+    def _decision_failure(self, kind, started, error):
+        """A core error as the outcome routing has always reported: 'http'
+        when the server replied, 'local_config' (cost 0) for a key missing
+        locally, 'timeout', else 'error'."""
+        cost = None
+        if error.status is not None:
+            outcome = 'http'
+        elif error.code == 'credential_missing':
+            outcome, cost = 'local_config', 0.0
+        elif error.code == 'timeout':
+            outcome = 'timeout'
+        else:
+            outcome = 'error'
+        return self._failure(kind, outcome, started, cost, error.message)
+
+    def close(self):
+        self._decision.close()
 
     def _read(self, kind, answers):
         """{'p', 'level', 'detail'} from the answers of one response."""
@@ -585,6 +605,7 @@ class JevVerifier(SystemOneVerifier):
 
     judge_name = 'jev'
     default_prices = JEV_PRICES
+    client_class = JevClient
 
     def __init__(
         self,

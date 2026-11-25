@@ -36,14 +36,20 @@ NOUL_KEYS = ('true', 'false')
 
 
 class DecisionError(Exception):
-    """A failed decision. ``message`` never holds state, answer or key text."""
+    """A failed decision. ``message`` never holds state, answer or key text.
 
-    def __init__(self, code, message):
+    ``status`` is the HTTP status of a reply refused as a whole (an error
+    status, or a body that is not a JSON object); None for the rest: a
+    local error, a timeout, a failed connection or an unreadable answer.
+    """
+
+    def __init__(self, code, message, *, status=None):
         if code not in ERROR_CODES:
             raise ValueError(f'unknown error code {code!r}')
         super().__init__(f'{code}: {message}')
         self._code = code
         self._message = message
+        self._status = status
 
     @property
     def code(self):
@@ -52,6 +58,10 @@ class DecisionError(Exception):
     @property
     def message(self):
         return self._message
+
+    @property
+    def status(self):
+        return self._status
 
 
 def _invalid(message):

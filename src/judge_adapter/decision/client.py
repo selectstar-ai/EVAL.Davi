@@ -4,6 +4,7 @@
 
     client.ask(state, {'q1': question, ...}) -> Reply
     client.decide(state, question) -> answer record
+    client.send(state, {'q1': question, ...}) -> the reply JSON object
 
     SystemOneClient (abstract)  request, status mapping, strict reading
     ├── DaviClient              Davi at a configured URL, key optional
@@ -105,6 +106,11 @@ class SystemOneClient(ABC):
     def base_url(self):
         return self._base_url
 
+    @property
+    def scrubber(self):
+        """Holds the key once it is read; scrubs it from any text."""
+        return self._scrubber
+
     @abstractmethod
     def _headers(self, key):
         """Request headers for ``key`` (which may be None)."""
@@ -117,11 +123,9 @@ class SystemOneClient(ABC):
 
     def ask(self, state, questions):
         """Several questions about one state, in one request -> ``Reply``."""
-        body = self.body(state, questions)
         started = self._clock()
-        response = self._send(body)
+        data = self.send(state, questions)
         latency_ms = round((self._clock() - started) * 1000.0, 1)
-        data = self._json(response)
         answers = data.get('answers')
         if not isinstance(answers, dict):
             raise DecisionError('format_error', 'the reply has no answers')
@@ -143,6 +147,15 @@ class SystemOneClient(ABC):
             usage if isinstance(usage, dict) else None,
             meta,
         )
+
+    def send(self, state, questions):
+        """Validate and send one request -> the reply's JSON object.
+
+        Status and JSON are checked; the answers are not read (``ask``
+        reads them strictly). For a caller that keeps its own reading.
+        """
+        body = self.body(state, questions)
+        return self._json(self._post(body))
 
     def body(self, state, questions):
         """The request body; validates before anything is sent."""
@@ -205,7 +218,7 @@ class SystemOneClient(ABC):
                 )
             return self._client
 
-    def _send(self, body):
+    def _post(self, body):
         payload = json.dumps(body, ensure_ascii=False).encode('utf-8')
         client = self._http()
         try:
@@ -228,19 +241,19 @@ class SystemOneClient(ABC):
             data = None
         if status == 200:
             if not isinstance(data, dict):
-                raise DecisionError('format_error', 'the reply is not JSON')
+                raise DecisionError(
+                    'format_error', 'the reply is not JSON', status=status
+                )
             return data
         name = _server_error_name(data)
         where = f'HTTP {status}' + (f', {name}' if name else '')
         if status in (401, 403):
-            raise DecisionError(
-                'credential_missing', f'the server refused the key ({where})'
-            )
-        if status in (400, 404, 413, 422):
-            raise DecisionError(
-                'invalid_request', f'the server rejected the request ({where})'
-            )
-        raise DecisionError('provider_error', f'the server failed ({where})')
+            code, what = 'credential_missing', 'the server refused the key'
+        elif status in (400, 404, 413, 422):
+            code, what = 'invalid_request', 'the server rejected the request'
+        else:
+            code, what = 'provider_error', 'the server failed'
+        raise DecisionError(code, f'{what} ({where})', status=status)
 
 
 class DaviClient(SystemOneClient):

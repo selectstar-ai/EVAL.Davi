@@ -22,6 +22,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from judge_adapter.decision import DaviClient, JevClient
 from judge_adapter.keys import CredentialMissing
 from judge_adapter.routing import (
     analysis,
@@ -398,6 +399,118 @@ def test_davi_pre_ensemble_asks_every_phrasing_and_averages_logits():
     )
     verdict = verifier.verify('Who wrote Hamlet?', kind='pre')
     assert verdict.p_accept == pytest.approx(0.3)
+
+
+# Request bytes, headers and Verdicts recorded from the SystemOne verifiers
+# before they sent through the decision core (P2). The replies use 2-decimal
+# probabilities: the tier answer sums to 0.99 and one ensemble answer to
+# 1.01, and routing still reads them. Rerecord only for a deliberate change
+# of the questions.
+SYSTEMONE_CASES = json.loads(
+    (ROOT / 'tests' / 'fixtures' / 'routing_systemone.json').read_text(
+        encoding='utf-8'
+    )
+)
+
+
+@pytest.mark.parametrize(
+    'case', SYSTEMONE_CASES, ids=[case['name'] for case in SYSTEMONE_CASES]
+)
+def test_systemone_requests_and_verdicts_match_the_recording(case):
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        return httpx.Response(200, json=case['reply'])
+
+    env = {
+        name: value.replace('<KEY>', KEY)
+        for name, value in case['env'].items()
+    }
+    verifier = verifiers.build_verifier(
+        case['judge'],
+        env,
+        transport=httpx.MockTransport(handle),
+        clock=lambda: 0.0,
+    )
+    verdict = verifier.verify(**case['args'])
+    (request,) = seen
+    assert str(request.url) == case['url']
+    assert request.content == json.dumps(
+        case['body'], ensure_ascii=False
+    ).encode('utf-8')
+    for name, value in case['headers'].items():
+        expected = value.replace('<KEY>', KEY) if value else value
+        assert request.headers.get(name) == expected
+    assert verdict.to_dict() == case['verdict']
+    args = {'candidate': None, 'rubric': None, **case['args']}
+    if args['kind'] in ('pre', 'tier'):
+        args['candidate'] = None  # as ``verify`` does
+    assert verifier.body(**args) == case['body']
+
+
+def test_systemone_verifiers_send_through_the_decision_core():
+    assert verifiers.DaviVerifier.client_class is DaviClient
+    assert verifiers.JevVerifier.client_class is JevClient
+
+
+def raises(error):
+    def handle(request):
+        raise error
+
+    return handle
+
+
+@pytest.mark.parametrize(
+    'handle, outcome',
+    [
+        (
+            lambda r: httpx.Response(
+                500, text=f'boom {r.headers.get("authorization")}'
+            ),
+            'http',
+        ),
+        (lambda r: httpx.Response(401, json={'error': 'Bad: key'}), 'http'),
+        (
+            lambda r: httpx.Response(
+                422, json={'error': 'InputTooLong: TASK-TEXT'}
+            ),
+            'http',
+        ),
+        (lambda r: httpx.Response(200, text='TASK-TEXT'), 'http'),
+        (lambda r: httpx.Response(200, json=[1, 2]), 'http'),
+        (raises(httpx.ReadTimeout('slow')), 'timeout'),
+        (raises(httpx.ConnectError('refused')), 'error'),
+        (lambda r: httpx.Response(200, json={'answers': {}}), 'format_error'),
+        (lambda r: httpx.Response(200, json={'answers': []}), 'format_error'),
+    ],
+)
+def test_systemone_failures_keep_their_outcomes(handle, outcome):
+    # the outcomes recorded before P2; the details now come from the core
+    # and hold neither the key nor the server's text
+    env = {'DAVI_BASE_URL': 'http://davi.test', 'DAVI_API_KEY': KEY}
+    verdict = verifiers.build_verifier(
+        'davi', env, transport=httpx.MockTransport(handle)
+    ).verify('TASK-TEXT', 'c')
+    assert (verdict.outcome, verdict.p_accept, verdict.cost_usd) == (
+        outcome,
+        None,
+        None,
+    )
+    assert KEY not in verdict.detail and 'TASK-TEXT' not in verdict.detail
+
+
+def test_systemone_reading_stays_as_lenient_as_before():
+    # routing reads the accept share alone, as it did before P2
+    reply = {'answers': {'route': {'probabilities': {'accept': 0.4}}}}
+    verdict = verifiers.build_verifier(
+        'davi',
+        {'DAVI_BASE_URL': 'http://davi.test'},
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json=reply)
+        ),
+    ).verify('t', 'c')
+    assert (verdict.outcome, verdict.p_accept) == ('ok', 0.4)
 
 
 def runpod_transport(bodies):
