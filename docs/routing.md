@@ -56,8 +56,10 @@
   | (참고) haiku → Davi 답 판정 → opus (`post`) | 65.6% | 66.9% |
   | (참고) opus만 | 71.8% | 71.8% |
 
-  기본 기준값(`route_tier_low` 0.48, `route_tier_high` 0.78)에서 Davi는 정답률 71.3%, 비용 70%, 문항당 9.7초
-  (opus만과 같은 속도)였습니다. 이 기준값은 이 데이터로 정했으므로 낙관적이고, 고난도 문항에 맞춘 값입니다. 쉬운
+  당시 기준값(`route_tier_low` 0.48, `route_tier_high` 0.78)에서 Davi는 정답률 71.3%, 비용 70%, 문항당 9.7초
+  (opus만과 같은 속도)였습니다. 이 기준값은 이 데이터로 정했으므로 낙관적이고, 고난도 문항에 맞춘 값입니다.
+  2026-11-25부터 기본값은 `davi-mini`에 맞춘 0.11 / 0.65입니다(같은 K-HLE 문항으로 다시 잼, 반으로 나눠 고른
+  정답률 66.9~69.4%, 비용은 opus의 약 70%, 같은 실행에서 sonnet만 66.1%·opus만 71.2%). 쉬운
   질문("대한민국의 수도는?", "2 더하기 2는?")은 0.03~0.09로 나와 cheap 모델로 갑니다. 다른 작업에 쓸 때는
   기준값을 다시 맞추세요.
 
@@ -145,10 +147,11 @@ claude -p "..." --plugin-dir plugins/davi-route  # headless
 | `route_enabled` | false | A + E 켜기/끄기 |
 | `route_mode` | tiers | `post`: cheap 먼저, 답을 판정해 필요하면 strong으로 재실행 / `pre`: 실행 전 과제만 판정해 cheap 또는 strong으로 바로 보냄(재실행 없음, 답을 보지 못함) / `both`: `pre`로 보낸 뒤 cheap으로 간 것만 답을 다시 판정 / `tiers`: 실행 전 난이도로 cheap / mid / strong 중 하나로 보냄 |
 | `route_mid_model` | sonnet | (`tiers`) 중간 난이도에 쓸 모델 |
-| `route_tier_low` / `route_tier_high` | 0.48 / 0.78 | (`tiers`) 난이도가 low 미만이면 cheap, high 이상이면 strong, 그 사이는 mid. K-HLE로 정한 값 |
+| `route_tier_low` / `route_tier_high` | 0.11 / 0.65 | (`tiers`) 난이도가 low 미만이면 cheap, high 이상이면 strong, 그 사이는 mid. K-HLE에서 davi-mini로 정한 값 |
 | `route_tier_check` | false | (`tiers`) cheap 모델로 간 답도 판정해 `route_threshold` 미만이면 strong으로 재실행 |
 | `route_judge` | davi | davi / jev / claude / fake |
 | `davi_base_url` / `davi_api_key` | (없음) | Davi 서버 주소(`POST /v1/systemone`)와 선택 키. 플러그인 설정 창에서 입력하고, 넣으면 `DAVI_BASE_URL` / `DAVI_API_KEY` 환경변수보다 우선합니다 |
+| `davi_model` | davi-mini | 서버에 보낼 Davi 모델 이름(`davi-mini`, `davi-0.2.0`). 예전 자체 서버는 이 값을 무시합니다. 바꾸면 기준값도 다시 맞추세요 |
 | `route_threshold` | 0.5 | (`post`/`both`) 답의 P(accept)가 이 값보다 작으면 escalate |
 | `route_pre_threshold` | 0.5 | (`pre`/`both`) 과제만 본 P(저비용 모델 성공)가 이 값보다 작으면 strong 모델로 바로 보냄 |
 | `route_cheap_model` / `route_strong_model` | haiku / opus | 모델 문자열 |

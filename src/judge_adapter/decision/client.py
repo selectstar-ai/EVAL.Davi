@@ -35,7 +35,7 @@ DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_OPTIONS = 512
 JEV_BASE_URL = 'https://api.typesafe.ai'
 JEV_DEFAULT_MODEL = 'jev-latest'
-DAVI_DEFAULT_MODEL = 'davi'
+DAVI_DEFAULT_MODEL = 'davi-mini'
 
 _ERROR_NAME_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_]{0,40}):')
 

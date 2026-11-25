@@ -1,6 +1,6 @@
 {
   "name": "davi-route",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "EXPERIMENTAL routing hooks for measuring a verifier inside Claude Code, plus davi-read. Turn features on and off with /davi-route:setup: subagent routing (tiers by default: rate the task's difficulty and send it to the cheap, mid or strong model; or post, pre, both) and a completion check at Stop. The settings dialog holds only the connection: the Davi server URL and keys. All off by default and fail-open. davi-read (skill): the passages of a web page or file that answer a question, verbatim, chosen by Davi. Install as davi-route@datumo, or load with --plugin-dir from an EVAL.Davi checkout.",
   "author": {
     "name": "hundredeuk2",

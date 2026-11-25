@@ -608,7 +608,7 @@ class DaviVerifier(SystemOneVerifier):
         self,
         base_url,
         key_provider=None,
-        model='davi',
+        model='davi-mini',
         pre_ensemble=True,
         **kwargs,
     ):
@@ -796,7 +796,7 @@ def build_verifier(
             key_provider=lazy_key(
                 env, SECRET_ENVS['davi_systemone'], required=False
             ),
-            model=opt(env, 'davi_model', 'davi'),
+            model=opt(env, 'davi_model', 'davi-mini'),
             pre_ensemble=opt_flag(env, 'davi_pre_ensemble', True),
             usd_in_per_mtok=opt_number(env, 'davi_usd_in_per_mtok'),
             usd_out_per_mtok=opt_number(env, 'davi_usd_out_per_mtok'),

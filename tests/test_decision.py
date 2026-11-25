@@ -337,3 +337,11 @@ def test_options_file_fills_only_unset_options(tmp_path):
     merged = with_options_file(dialog, str(path))
     assert 'DAVI_ROUTE_DAVI_BASE_URL' not in merged
     assert build_client('davi', merged).base_url == 'http://dialog.test'
+
+
+def test_sum_tolerance_accepts_two_decimal_rounding():
+    # The hosted Davi server rounds each probability to two decimals.
+    three = ChoiceQuestion('Pick one.', {'a': 'A', 'b': 'B', 'c': 'C'})
+    shares = {'a': 0.98, 'b': 0.01, 'c': 0.0}
+    server = Server(ok({'q': {'probabilities': shares}}))
+    assert davi(server).decide('state', three).value == 'a'
