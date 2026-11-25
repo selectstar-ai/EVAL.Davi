@@ -1,8 +1,9 @@
 # Coding rules
 
 These rules apply to the routing code and the code built on the same rules: `src/judge_adapter/routing/`,
-`src/judge_adapter/decision/`, `src/judge_adapter/reading/`, `plugins/davi-route/hooks/`, `tests/test_routing.py`,
-`tests/test_decision.py` and `tests/test_reading.py`. The older modules (`judge_adapter` core, the `davi` filter plugin) are frozen in their own
+`src/judge_adapter/decision/`, `src/judge_adapter/reading/`, `src/judge_adapter/decision_mcp/`,
+`plugins/davi-route/hooks/`, `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py` and
+`tests/test_decision_mcp.py`. The older modules (`judge_adapter` core, the `davi` filter plugin) are frozen in their own
 style; do not reformat them.
 
 Check before every commit:

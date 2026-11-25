@@ -10,7 +10,7 @@ Davi with two other judges, TypeSafe Jev and Claude Haiku 5.5, and with single-m
 measuring accuracy, cost, and consistency.
 
 [한국어 README](docs/README.ko.md) · [Routing experiment log (Korean)](docs/routing.md) ·
-[Reference](docs/reference.md) ·
+[Reference](docs/reference.md) · [Decision MCP server](docs/decision-mcp.md) ·
 [GitHub](https://github.com/selectstar-ai/EVAL.Davi)
 
 > Experimental. Every hook is off by default and fail-open: a hook error or a slow judge leaves the call unchanged,
@@ -343,11 +343,12 @@ A task line has `id`, `prompt` and either `answer` + `grader` (`contains`, `exac
 - `src/judge_adapter/decision/` — Decision core: `ChoiceQuestion` / `NoulQuestion` and the `/v1/systemone`
   clients (`DaviClient`, `JevClient`) with strict reading and five error codes
 - `src/judge_adapter/reading/` — `davi-read`: blocks, fetching limits, two-pass judging, choosing, the command
+- `src/judge_adapter/decision_mcp/` — `davi-decision-mcp`: the `decide` MCP tool, `state_files` reading, the command
 - `plugins/davi-route/skills/davi-read/`, `plugins/davi-route/hooks/davi_read.py` — The `davi-read` skill and the
   plugin's launcher for it
 - `examples/routing/` — Example task and arm files
 - `docs/` — Routing details (Korean), legacy plugin and reference docs
-- `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py` — Tests
+- `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py`, `tests/test_decision_mcp.py` — Tests
 
 ```bash
 ruff check && ruff format --check
@@ -432,6 +433,20 @@ davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
 On the Python `functools` page (2026-10-27, Davi, one run each), it kept 6 of 143 blocks (1,327 of 32,464
 characters) in English and 7 of 143 (1,410 of 27,358) in Korean, both including the sentence that answers the
 question, in about 6 seconds.
+
+## Experimental: one judgment as an MCP tool
+
+`davi-decision-mcp` is a local stdio MCP server with one tool, `decide`: one `choice` or `noul` (true/false) question
+per call, answered by Davi or Jev as chosen when the server starts. The material can be text (`state`) or local files
+(`state_files`) that the server reads, so Claude does not retype them; their contents are sent to the judge server.
+It needs Python 3.10+ and the `mcp` extra; the base install does not.
+
+```bash
+pip install -e ".[mcp]"
+claude mcp add davi-decision -e DAVI_BASE_URL=http://<davi-host>:<port> -- davi-decision-mcp --judge davi
+```
+
+Settings, limits, errors and the Jev example: [docs/decision-mcp.md](docs/decision-mcp.md).
 
 ## Legacy: the `davi` search-result filter
 

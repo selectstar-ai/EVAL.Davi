@@ -1,6 +1,7 @@
 # Claude Code 서브에이전트 라우터로서의 Davi
 
 [README (English)](../README.md) · [라우팅 실험 기록](routing.md) · [Reference](reference.md) ·
+[판정 MCP 서버](decision-mcp.md#한국어) ·
 [GitHub](https://github.com/selectstar-ai/EVAL.Davi)
 
 코딩 에이전트는 보통 모든 작업을 한 모델로 돌립니다. 작은 모델은 싸지만 어려운 작업을 놓치고, 강한 모델은 더 많이
@@ -334,11 +335,12 @@ davi-route analyze --cache runs/x --cheap cheap --strong strong
 - `src/judge_adapter/decision/` — 공통 판정 모듈: `ChoiceQuestion` / `NoulQuestion`과 `/v1/systemone` client
   (`DaviClient`, `JevClient`), 엄격한 응답 검증과 다섯 가지 오류 코드
 - `src/judge_adapter/reading/` — `davi-read`: 블록 나누기, 페이지 받기 제한, 2단계 판정, 고르기, 명령
+- `src/judge_adapter/decision_mcp/` — `davi-decision-mcp`: `decide` MCP 도구, `state_files` 읽기, 명령
 - `plugins/davi-route/skills/davi-read/`, `plugins/davi-route/hooks/davi_read.py` — `davi-read` skill과 플러그인의
   실행 파일
 - `examples/routing/` — 예시 작업·arm 파일
 - `docs/` — 라우팅 실험 기록(한국어), 레거시 플러그인과 레퍼런스 문서
-- `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py` — 테스트
+- `tests/test_routing.py`, `tests/test_decision.py`, `tests/test_reading.py`, `tests/test_decision_mcp.py` — 테스트
 
 ```bash
 ruff check && ruff format --check
@@ -418,6 +420,20 @@ davi-read --file docs/routing.md "route_mode는 무엇을 바꾸나요?"
 
 Python `functools` 문서(2026-10-27, Davi, 각 1회)에서 영어는 143블록 중 6개(32,464자 중 1,327자), 한국어는
 143블록 중 7개(27,358자 중 1,410자)를 남겼고, 둘 다 질문에 답하는 문장을 포함했습니다. 약 6초 걸렸습니다.
+
+## 실험 기능: MCP 도구로 판정 한 번
+
+`davi-decision-mcp`는 `decide` 도구 하나를 가진 로컬 stdio MCP 서버입니다. 호출마다 `choice` 또는 `noul`(참/거짓)
+질문 하나를 보내고, 서버를 띄울 때 고른 Davi 또는 Jev가 답합니다. 자료는 문자열(`state`)이나 서버가 직접 읽는 로컬
+파일(`state_files`)로 줄 수 있어 Claude가 자료를 다시 쓰지 않아도 됩니다. 파일 내용은 판단 서버로 전송됩니다.
+Python 3.10 이상과 `mcp` extra가 필요하며, 기본 설치에는 필요 없습니다.
+
+```bash
+pip install -e ".[mcp]"
+claude mcp add davi-decision -e DAVI_BASE_URL=http://<davi-host>:<port> -- davi-decision-mcp --judge davi
+```
+
+설정, 한도, 오류와 Jev 예시: [decision-mcp.md](decision-mcp.md#한국어).
 
 ## 레거시: `davi` 검색 결과 필터
 
